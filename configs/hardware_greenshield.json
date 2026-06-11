@@ -1,0 +1,201 @@
+{
+  "device": {
+    "name": "OpenScan Mini v2 (Greenshield)",
+    "model": "mini",
+    "shield": "greenshield",
+    "pi_model": "Raspberry Pi 4",
+    "os": "Raspberry Pi OS (Bookworm) 64-bit",
+    "notes": "High-performance refactored firmware with ArUco homing and networked photogrammetry"
+  },
+
+  "motors": {
+    "rotor": {
+      "description": "Camera arm rotation (0-145° tilt)",
+      "step_pin": 27,
+      "dir_pin": 17,
+      "enable_pin": 22,
+      "steps_per_rotation": 10240,
+      "angle_per_step": 0.03515625,
+      "max_speed_steps_sec": 5000,
+      "max_angle_sec": 175.78,
+      "acceleration_steps_sec2": 10000,
+      "min_angle": 0,
+      "max_angle": 145,
+      "direction": 1,
+      "acceleration_ramp": 5000,
+      "delay_base": 0.0001
+    },
+    "turntable": {
+      "description": "Object rotation (0-360°)",
+      "step_pin": 16,
+      "dir_pin": 6,
+      "enable_pin": 22,
+      "steps_per_rotation": 800,
+      "angle_per_step": 0.45,
+      "max_speed_steps_sec": 3000,
+      "max_angle_sec": 1350.0,
+      "acceleration_steps_sec2": 8000,
+      "min_angle": 0,
+      "max_angle": 360,
+      "direction": 1,
+      "acceleration_ramp": 4000,
+      "delay_base": 0.0002
+    }
+  },
+
+  "endstops": {
+    "rotor": {
+      "pin": 18,
+      "position_angle": 145,
+      "pull_up": true,
+      "debounce_ms": 50,
+      "normally_open": true,
+      "stop_on_trigger": true
+    }
+  },
+
+  "camera": {
+    "type": "Arducam IMX519",
+    "interface": "USB 3.0",
+    "resolution": "4656x3496",
+    "sensor_size_mm": [7.9, 5.3],
+    "pixel_size_um": 1.7,
+    "lens": "Standard 50mm",
+    "autofocus": {
+      "enabled": true,
+      "method": "v4l2-ctl",
+      "focus_range": [0, 1000],
+      "default_focus": 500
+    },
+    "capture_settings": {
+      "exposure_mode": "auto",
+      "white_balance_mode": "auto",
+      "ISO_range": [100, 3200],
+      "shutter_speed_ms": "auto",
+      "jpeg_quality": 90
+    }
+  },
+
+  "ringlight": {
+    "type": "12V LED Ringlight",
+    "power": "2000 mA @ 12V",
+    "control": "PWM via GPIO",
+    "channels": [
+      {
+        "id": 1,
+        "gpio_pin": 26,
+        "pwm_capable": true,
+        "pwm_frequency_hz": 1000,
+        "circuit": "GPIO → MOSFET Gate → 12V Supply",
+        "components": [
+          "1× MOSFET (2N7000 or IRF520N)",
+          "1× 1kΩ Resistor (gate protection)",
+          "1× 1N4007 Diode (back-EMF protection)"
+        ],
+        "control_range": [0, 255],
+        "brightness_mapping": "linear"
+      },
+      {
+        "id": 2,
+        "gpio_pin": 19,
+        "pwm_capable": true,
+        "pwm_frequency_hz": 1000,
+        "circuit": "GPIO → MOSFET Gate → 12V Supply",
+        "components": [
+          "1× MOSFET (2N7000 or IRF520N)",
+          "1× 1kΩ Resistor (gate protection)",
+          "1× 1N4007 Diode (back-EMF protection)"
+        ],
+        "control_range": [0, 255],
+        "brightness_mapping": "linear"
+      }
+    ],
+    "connector": "JST XH",
+    "safety": {
+      "max_brightness_default": 200,
+      "thermal_cutoff_celsius": 60,
+      "cooldown_seconds": 30
+    }
+  },
+
+  "gpio_pins": {
+    "motors": {
+      "rotor_step": 27,
+      "rotor_dir": 17,
+      "turntable_step": 16,
+      "turntable_dir": 6,
+      "motor_enable": 22
+    },
+    "endstops": {
+      "rotor_endstop": 18
+    },
+    "ringlight": {
+      "ringlight_ch1": 26,
+      "ringlight_ch2": 19
+    },
+    "reserved": [
+      2,
+      3,
+      4,
+      5,
+      14,
+      15,
+      23,
+      24,
+      25
+    ],
+    "available": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      20,
+      21
+    ]
+  },
+
+  "interfaces": {
+    "i2c": {
+      "enabled": false,
+      "sda_pin": 2,
+      "scl_pin": 3
+    },
+    "spi": {
+      "enabled": false,
+      "miso_pin": 9,
+      "mosi_pin": 10,
+      "clk_pin": 11
+    },
+    "uart": {
+      "enabled": false,
+      "tx_pin": 14,
+      "rx_pin": 15
+    }
+  },
+
+  "performance": {
+    "scan_time_per_position_sec": 2.0,
+    "scan_positions_typical": 100,
+    "total_scan_time_min": 3.5,
+    "image_preview_fps": 15,
+    "ringlight_warmup_sec": 2,
+    "motor_acceleration_sec": 0.5
+  },
+
+  "software": {
+    "framework": "FastAPI",
+    "python_version": "3.11+",
+    "key_libraries": [
+      "gpiozero>=2.0",
+      "picamera2",
+      "opencv-python>=4.8",
+      "numpy",
+      "fastapi",
+      "uvicorn",
+      "aiofiles"
+    ]
+  }
+}

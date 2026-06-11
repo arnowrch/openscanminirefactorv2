@@ -1,0 +1,348 @@
+"""
+OpenScan Mini Firmware — Main Entry Point
+
+FastAPI application for OpenScan Mini hardware control.
+Handles hardware initialization, API routing, and WebSocket connections.
+"""
+
+import asyncio
+import logging
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from openscan_mini.config import HardwareConfig, setup_logging
+
+
+# Configure logging
+logger = setup_logging(log_level="INFO", json_format=True)
+app_logger = logging.getLogger(__name__)
+
+
+# Global hardware config (loaded on startup)
+HARDWARE_CONFIG: HardwareConfig | None = None
+
+
+def load_hardware_config() -> HardwareConfig:
+    """
+    Load hardware configuration from JSON file.
+
+    Searches in multiple locations:
+    1. ~/.openscan/hardware.json (user home)
+    2. ./configs/hardware_greenshield.json (project root)
+    3. /etc/openscan/hardware.json (system-wide)
+
+    Returns:
+        HardwareConfig instance
+
+    Raises:
+        FileNotFoundError: If no config file found
+    """
+    candidates = [
+        Path.home() / ".openscan" / "hardware.json",
+        Path(__file__).parent.parent.parent / "configs" / "hardware_greenshield.json",
+        Path("/etc/openscan/hardware.json"),
+    ]
+
+    for config_path in candidates:
+        if config_path.exists():
+            app_logger.info(f"Found hardware config: {config_path}")
+            return HardwareConfig.from_json_file(config_path)
+
+    app_logger.error(f"No hardware config found. Searched: {candidates}")
+    raise FileNotFoundError(
+        f"Hardware configuration not found. "
+        f"Create one at {candidates[0]} or {candidates[1]}"
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context manager.
+
+    Handles startup and shutdown events.
+    """
+    # Startup
+    app_logger.info("OpenScan Mini firmware starting up...")
+
+    global HARDWARE_CONFIG
+    try:
+        HARDWARE_CONFIG = load_hardware_config()
+        app_logger.info(HARDWARE_CONFIG.dump_summary())
+    except FileNotFoundError as e:
+        app_logger.error(f"Failed to load hardware config: {e}")
+        sys.exit(1)
+
+    app_logger.info("✓ Hardware configured")
+    app_logger.info("✓ FastAPI application ready")
+    app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
+    app_logger.info(f"✓ API docs available at http://0.0.0.0:8000/docs")
+
+    yield
+
+    # Shutdown
+    app_logger.info("OpenScan Mini firmware shutting down...")
+    app_logger.info("✓ Cleanup complete")
+
+
+# Create FastAPI app
+app = FastAPI(
+    title="OpenScan Mini Firmware",
+    description="High-Performance 3D Scanner Control API",
+    version="0.2.0-dev",
+    lifespan=lifespan,
+)
+
+# CORS middleware (allow all origins for local network)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============================================================================
+# HEALTH CHECK & STATUS ENDPOINTS
+# ============================================================================
+
+
+@app.get("/api/v1/status")
+async def get_status():
+    """
+    Get device status and system information.
+
+    Returns:
+        Device info, hardware config summary, uptime, etc.
+    """
+    if not HARDWARE_CONFIG:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Hardware not initialized"},
+        )
+
+    return {
+        "device": {
+            "name": HARDWARE_CONFIG.device.name,
+            "model": HARDWARE_CONFIG.device.model,
+            "shield": HARDWARE_CONFIG.device.shield,
+            "pi_model": HARDWARE_CONFIG.device.pi_model,
+            "os": HARDWARE_CONFIG.device.os,
+        },
+        "firmware": {
+            "version": "0.2.0-dev",
+            "api_version": "v1",
+        },
+        "status": "ready",
+        "motors": {
+            "rotor": {
+                "position": 0.0,
+                "min_angle": HARDWARE_CONFIG.motors["rotor"].min_angle,
+                "max_angle": HARDWARE_CONFIG.motors["rotor"].max_angle,
+            },
+            "turntable": {
+                "position": 0.0,
+                "min_angle": HARDWARE_CONFIG.motors["turntable"].min_angle,
+                "max_angle": HARDWARE_CONFIG.motors["turntable"].max_angle,
+            },
+        },
+        "camera": {
+            "type": HARDWARE_CONFIG.camera.type,
+            "resolution": HARDWARE_CONFIG.camera.resolution,
+            "autofocus": HARDWARE_CONFIG.camera.autofocus.get("enabled", False),
+        },
+        "ringlight": {
+            "channels": len(HARDWARE_CONFIG.ringlight.channels),
+            "power": HARDWARE_CONFIG.ringlight.power,
+        },
+    }
+
+
+@app.get("/api/v1/health")
+async def health_check():
+    """Quick health check endpoint."""
+    return {"status": "ok", "service": "openscan-mini"}
+
+
+@app.get("/docs")
+async def swagger_ui():
+    """Redirect to API documentation."""
+    return JSONResponse({"message": "API docs available at /docs"})
+
+
+# ============================================================================
+# PLACEHOLDER ROUTES (to be implemented in Phase 2)
+# ============================================================================
+
+
+@app.post("/api/v1/hardware/motors/rotor")
+async def move_rotor(angle: float):
+    """
+    Move rotor to specified angle.
+
+    Args:
+        angle: Target angle in degrees (0-145)
+
+    Returns:
+        Status and actual position
+    """
+    if not HARDWARE_CONFIG:
+        return JSONResponse(status_code=500, content={"error": "Hardware not initialized"})
+
+    motor_config = HARDWARE_CONFIG.get_motor_config("rotor")
+
+    if not (motor_config.min_angle <= angle <= motor_config.max_angle):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"Angle must be between {motor_config.min_angle} "
+                f"and {motor_config.max_angle}"
+            },
+        )
+
+    app_logger.info(f"Rotor move requested to {angle}°")
+
+    # TODO: Implement actual motor control
+    return {"status": "pending", "target_angle": angle, "message": "Motor control not yet implemented"}
+
+
+@app.post("/api/v1/hardware/motors/turntable")
+async def move_turntable(angle: float):
+    """
+    Move turntable to specified angle.
+
+    Args:
+        angle: Target angle in degrees (0-360)
+
+    Returns:
+        Status and actual position
+    """
+    if not HARDWARE_CONFIG:
+        return JSONResponse(status_code=500, content={"error": "Hardware not initialized"})
+
+    motor_config = HARDWARE_CONFIG.get_motor_config("turntable")
+
+    if not (motor_config.min_angle <= angle <= motor_config.max_angle):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"Angle must be between {motor_config.min_angle} "
+                f"and {motor_config.max_angle}"
+            },
+        )
+
+    app_logger.info(f"Turntable move requested to {angle}°")
+
+    # TODO: Implement actual motor control
+    return {"status": "pending", "target_angle": angle, "message": "Motor control not yet implemented"}
+
+
+@app.post("/api/v1/hardware/ringlight")
+async def set_ringlight_brightness(brightness: int = 200):
+    """
+    Set ringlight brightness for all channels.
+
+    Args:
+        brightness: Brightness level (0-255)
+
+    Returns:
+        Confirmation
+    """
+    if brightness < 0 or brightness > 255:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Brightness must be 0-255"},
+        )
+
+    app_logger.info(f"Ringlight brightness requested: {brightness}")
+
+    # TODO: Implement PWM control
+    return {"status": "ok", "brightness": brightness, "message": "Ringlight control not yet implemented"}
+
+
+@app.websocket("/ws/scan")
+async def websocket_scan(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time scan preview and status.
+
+    Sends events:
+    - scan_progress: Current scan step and preview image
+    - motor_position: Current motor angles
+    - error: Error messages
+    """
+    await websocket.accept()
+    app_logger.info("WebSocket client connected: /ws/scan")
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            app_logger.debug(f"WebSocket received: {data}")
+
+            # Echo back for now
+            await websocket.send_json({"type": "echo", "message": data})
+
+    except Exception as e:
+        app_logger.error(f"WebSocket error: {e}")
+    finally:
+        app_logger.info("WebSocket client disconnected")
+
+
+# ============================================================================
+# ERROR HANDLERS
+# ============================================================================
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Handle uncaught exceptions."""
+    app_logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    """Handle 404 not found."""
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Endpoint not found", "path": str(request.url.path)},
+    )
+
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
+
+
+def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
+    """
+    Run the FastAPI development server.
+
+    Args:
+        host: Host to bind to
+        port: Port to bind to
+        reload: Enable auto-reload on code changes
+    """
+    import uvicorn
+
+    app_logger.info(f"Starting uvicorn server on {host}:{port}")
+
+    uvicorn.run(
+        "openscan_mini.main:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_config=None,  # Use our custom logging config
+    )
+
+
+if __name__ == "__main__":
+    run_server(reload=True)  # Enable reload for development

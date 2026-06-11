@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+
+# Project-specific
+/projects/*
+!/projects/.gitkeep
+/tmp/
+/logs/
+*.log
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# API docs
+/docs/openapi.json
+
+# Node modules (if UI integrated later)
+node_modules/
+yarn-error.log
+npm-debug.log*
+
+# Uploads & temp
+/uploads/
+/temp/
+*.zip
+*.tar.gz

@@ -1,0 +1,51 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+aiofiles==23.2.1
+python-multipart==0.0.6
+
+# GPIO & Hardware (Raspberry Pi specific)
+gpiozero==2.0.1
+RPi.GPIO==0.7.0
+
+# Camera Control
+picamera2==0.5.3
+Pillow==10.1.0
+
+# Computer Vision & Image Processing
+opencv-python==4.8.1.78
+numpy==1.24.3
+scikit-image==0.22.0
+
+# Async & Scheduling
+APScheduler==3.10.4
+
+# Data & Config Management
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+orjson==3.9.10
+
+# Logging
+python-json-logger==2.0.7
+
+# HTTP & Networking
+httpx==0.25.1
+websockets==12.0
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.0
+
+# Development dependencies (optional)
+# Uncomment for dev environment:
+# pytest==7.4.3
+# pytest-asyncio==0.21.1
+# pytest-cov==4.1.0
+# black==23.12.0
+# ruff==0.1.8
+# mypy==1.7.0
+
+# Note: picamera2 and RPi.GPIO only install on actual Raspberry Pi hardware
+# On development machine, install without these:
+# pip install -r requirements.txt --ignore-platform-warnings
