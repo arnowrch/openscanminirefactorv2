@@ -16,6 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from openscan_mini.config import HardwareConfig, setup_logging
+from openscan_mini.controllers.hardware.motors import DualMotorController
+from openscan_mini.routers.v1 import motors_router
 
 
 # Configure logging
@@ -23,8 +25,9 @@ logger = setup_logging(log_level="INFO", json_format=True)
 app_logger = logging.getLogger(__name__)
 
 
-# Global hardware config (loaded on startup)
+# Global instances (loaded on startup)
 HARDWARE_CONFIG: HardwareConfig | None = None
+MOTOR_CONTROLLER: DualMotorController | None = None
 
 
 def load_hardware_config() -> HardwareConfig:
@@ -70,7 +73,9 @@ async def lifespan(app: FastAPI):
     # Startup
     app_logger.info("OpenScan Mini firmware starting up...")
 
-    global HARDWARE_CONFIG
+    global HARDWARE_CONFIG, MOTOR_CONTROLLER
+
+    # Load hardware configuration
     try:
         HARDWARE_CONFIG = load_hardware_config()
         app_logger.info(HARDWARE_CONFIG.dump_summary())
@@ -79,6 +84,17 @@ async def lifespan(app: FastAPI):
         sys.exit(1)
 
     app_logger.info("✓ Hardware configured")
+
+    # Initialize motor controller
+    try:
+        MOTOR_CONTROLLER = DualMotorController(HARDWARE_CONFIG)
+        # Register motor controller with router
+        motors_router.set_motor_controller(MOTOR_CONTROLLER)
+        app_logger.info("✓ Motor controller initialized")
+    except Exception as e:
+        app_logger.error(f"Failed to initialize motor controller: {e}")
+        sys.exit(1)
+
     app_logger.info("✓ FastAPI application ready")
     app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
     app_logger.info(f"✓ API docs available at http://0.0.0.0:8000/docs")
@@ -87,6 +103,12 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     app_logger.info("OpenScan Mini firmware shutting down...")
+
+    # Cleanup
+    if MOTOR_CONTROLLER:
+        MOTOR_CONTROLLER.cleanup()
+        app_logger.info("✓ Motor controller cleaned up")
+
     app_logger.info("✓ Cleanup complete")
 
 
@@ -106,6 +128,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(motors_router)
 
 
 # ============================================================================
@@ -177,70 +202,8 @@ async def swagger_ui():
 
 
 # ============================================================================
-# PLACEHOLDER ROUTES (to be implemented in Phase 2)
+# PLACEHOLDER ROUTES (to be implemented in later phases)
 # ============================================================================
-
-
-@app.post("/api/v1/hardware/motors/rotor")
-async def move_rotor(angle: float):
-    """
-    Move rotor to specified angle.
-
-    Args:
-        angle: Target angle in degrees (0-145)
-
-    Returns:
-        Status and actual position
-    """
-    if not HARDWARE_CONFIG:
-        return JSONResponse(status_code=500, content={"error": "Hardware not initialized"})
-
-    motor_config = HARDWARE_CONFIG.get_motor_config("rotor")
-
-    if not (motor_config.min_angle <= angle <= motor_config.max_angle):
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": f"Angle must be between {motor_config.min_angle} "
-                f"and {motor_config.max_angle}"
-            },
-        )
-
-    app_logger.info(f"Rotor move requested to {angle}°")
-
-    # TODO: Implement actual motor control
-    return {"status": "pending", "target_angle": angle, "message": "Motor control not yet implemented"}
-
-
-@app.post("/api/v1/hardware/motors/turntable")
-async def move_turntable(angle: float):
-    """
-    Move turntable to specified angle.
-
-    Args:
-        angle: Target angle in degrees (0-360)
-
-    Returns:
-        Status and actual position
-    """
-    if not HARDWARE_CONFIG:
-        return JSONResponse(status_code=500, content={"error": "Hardware not initialized"})
-
-    motor_config = HARDWARE_CONFIG.get_motor_config("turntable")
-
-    if not (motor_config.min_angle <= angle <= motor_config.max_angle):
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": f"Angle must be between {motor_config.min_angle} "
-                f"and {motor_config.max_angle}"
-            },
-        )
-
-    app_logger.info(f"Turntable move requested to {angle}°")
-
-    # TODO: Implement actual motor control
-    return {"status": "pending", "target_angle": angle, "message": "Motor control not yet implemented"}
 
 
 @app.post("/api/v1/hardware/ringlight")
@@ -262,7 +225,7 @@ async def set_ringlight_brightness(brightness: int = 200):
 
     app_logger.info(f"Ringlight brightness requested: {brightness}")
 
-    # TODO: Implement PWM control
+    # TODO: Implement PWM control in Phase 2
     return {"status": "ok", "brightness": brightness, "message": "Ringlight control not yet implemented"}
 
 
