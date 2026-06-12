@@ -239,7 +239,21 @@ class CameraController:
         ]
 
         if s.autofocus:
-            cmd += ["--autofocus-mode", "auto"]
+            # --autofocus-on-capture triggers a dedicated PDAF sweep right before
+            # the shutter fires (OS2: cam_AFmode=True, cam_timeout=800ms).
+            # Without this flag, rpicam-still only runs passive AF during --timeout
+            # and may capture before focus has converged.
+            cmd += [
+                "--autofocus-mode", "auto",
+                "--autofocus-on-capture",
+                "--autofocus-speed", "fast",
+                "--autofocus-range", "normal",
+            ]
+            # Extend timeout to 3s so AF sweep completes before capture
+            for i, arg in enumerate(cmd):
+                if arg == "--timeout":
+                    cmd[i + 1] = "3000"
+                    break
         else:
             cmd += [
                 "--autofocus-mode", "manual",
