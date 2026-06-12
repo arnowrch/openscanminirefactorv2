@@ -24,7 +24,11 @@ from openscan_mini.controllers.scan import ScanEngine
 from openscan_mini.routers.v1.motors import router as motors_router, set_motor_controller
 from openscan_mini.routers.v1.lights import router as lights_router, set_ringlight_controller
 from openscan_mini.routers.v1.camera import router as camera_router, set_camera_controller
-from openscan_mini.routers.v1.scan import router as scan_router, set_scan_engine
+from openscan_mini.routers.v1.scan import router as scan_router, set_scan_engine, set_hardware as set_scan_hardware
+from openscan_mini.routers.v1.tasks import router as tasks_router
+from openscan_mini.routers.v1.scan_path import router as scan_path_router, set_motor_config
+from openscan_mini.services.task_manager import get_task_manager
+from openscan_mini.services.project_manager import get_project_manager
 
 
 # Configure logging
@@ -140,6 +144,50 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app_logger.warning(f"Scan engine init failed (non-fatal): {e}")
 
+    # Inject hardware references into scan router (new TaskManager-based path)
+    try:
+        from openscan_mini.routers.v1.lights import RINGLIGHT as _rl
+        set_scan_hardware(MOTOR_CONTROLLER, camera, _rl)
+        app_logger.info("✓ Scan hardware references injected")
+    except Exception as e:
+        app_logger.warning(f"Scan hardware injection failed (non-fatal): {e}")
+
+    # ProjectManager — creates ~/openscan-projects/ if needed
+    try:
+        get_project_manager()
+        app_logger.info("✓ ProjectManager initialized")
+    except Exception as e:
+        app_logger.warning(f"ProjectManager init failed (non-fatal): {e}")
+
+    # Task manager — restore any tasks interrupted by a previous crash/restart
+    try:
+        tm = get_task_manager()
+        await tm.restore_interrupted_tasks()
+        app_logger.info("✓ Task manager initialized")
+    except Exception as e:
+        app_logger.warning(f"Task manager init failed (non-fatal): {e}")
+
+    # Pass motor config to path preview endpoint for TSP optimization
+    try:
+        if HARDWARE_CONFIG:
+            rotor_m = HARDWARE_CONFIG.motors.get("rotor")
+            table_m = HARDWARE_CONFIG.motors.get("turntable")
+            if rotor_m and table_m:
+                set_motor_config(
+                    {
+                        "steps_per_rotation": rotor_m.steps_per_rotation,
+                        "acceleration_steps_sec2": rotor_m.acceleration_steps_sec2,
+                        "max_speed_steps_sec": rotor_m.max_speed_steps_sec,
+                    },
+                    {
+                        "steps_per_rotation": table_m.steps_per_rotation,
+                        "acceleration_steps_sec2": table_m.acceleration_steps_sec2,
+                        "max_speed_steps_sec": table_m.max_speed_steps_sec,
+                    },
+                )
+    except Exception as e:
+        app_logger.warning(f"Motor config for path gen failed (non-fatal): {e}")
+
     app_logger.info("✓ FastAPI application ready")
     app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
     app_logger.info(f"✓ API docs available at http://0.0.0.0:8000/docs")
@@ -183,6 +231,8 @@ app.include_router(motors_router)
 app.include_router(lights_router)
 app.include_router(camera_router)
 app.include_router(scan_router)
+app.include_router(tasks_router)
+app.include_router(scan_path_router)
 
 # Serve UI — static/index.html at /
 _static_dir = Path(__file__).parent.parent.parent / "static"
