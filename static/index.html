@@ -57,6 +57,9 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .bl{bottom:14px;left:14px;border-width:0 0 2px 2px}.br{bottom:14px;right:14px;border-width:0 2px 2px 0}
 .badge{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);font-size:9px;font-family:var(--mono);font-weight:600;letter-spacing:.1em;color:var(--emerald)}
 .preview-meta{position:absolute;bottom:10px;right:10px;text-align:right;font-size:9px;font-family:var(--mono);color:rgba(255,255,255,.32);line-height:1.6}
+.an-overlay{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.an-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:5px;font-size:9px;font-weight:700;letter-spacing:.07em;font-family:var(--mono);backdrop-filter:blur(6px);background:rgba(0,0,0,.55)}
+.an-ok{color:var(--emerald)}.an-warn{color:var(--gold)}.an-info{color:var(--accent-b)}
 .load-bar{position:absolute;bottom:0;left:0;height:2px;background:var(--accent);box-shadow:0 0 7px var(--accent);animation:loadslide 1.2s ease-in-out infinite}
 @keyframes loadslide{0%{left:0;right:100%}50%{left:0;right:0}100%{left:100%;right:0}}
 
@@ -207,33 +210,55 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 <!-- ═══ CAMERA PANEL ═══ -->
 <section class="cam-panel">
   <div class="preview-wrap">
-    <img x-show="prevSrc" :src="prevSrc" class="preview-img"
-         :style="'transform:rotate('+previewRot+'deg);transition:transform .2s ease,opacity .25s ease;'+(prevLoading?'opacity:.65':'opacity:1')"
-         alt="preview">
-    <div class="ph" x-show="!prevSrc">
+    <!-- MJPEG live stream — browser handles multipart natively via <img> -->
+    <img x-ref="streamImg"
+         x-show="camOk"
+         :src="streamUrl"
+         class="preview-img"
+         :style="'transform:rotate('+previewRot+'deg)'"
+         @load="onStreamLoad()"
+         @error="onStreamError()"
+         alt="live preview">
+    <div class="ph" x-show="!camOk">
       <svg width="44" height="44" viewBox="0 0 48 48" fill="none" opacity=".25">
         <rect x="6" y="12" width="36" height="28" rx="3" stroke="currentColor" stroke-width="2"/>
         <circle cx="24" cy="26" r="7" stroke="currentColor" stroke-width="2"/>
         <rect x="17" y="8" width="6" height="4" rx="1" stroke="currentColor" stroke-width="2"/>
       </svg>
-      <span class="xs" x-text="camOk?'Initializing…':'Camera unavailable'"></span>
+      <span class="xs" x-text="'Camera unavailable'"></span>
     </div>
 
     <!-- Crosshair -->
-    <div class="xhair" x-show="xhair && prevSrc"><div class="xhair-dot"></div></div>
-    <template x-if="prevSrc">
+    <div class="xhair" x-show="xhair && camOk"><div class="xhair-dot"></div></div>
+    <template x-if="camOk">
       <div><div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div></div>
     </template>
 
-    <div class="badge" x-show="prevSrc">
-      <div class="dot live"></div>
-      <span x-text="prevAge+'s'"></span>
+    <!-- Live badge -->
+    <div class="badge" x-show="camOk">
+      <div class="dot" :class="streamOk?'live':'off'"></div>
+      <span x-text="streamOk?'LIVE':'…'"></span>
     </div>
-    <div class="preview-meta" x-show="prevSrc">
+
+    <!-- Analysis overlay (top-right) -->
+    <div class="an-overlay" x-show="camOk && an.sharpness > 0">
+      <span class="an-chip" :class="an.is_sharp?'an-ok':'an-warn'"
+            :title="'Sharpness: '+an.sharpness">
+        <svg width="9" height="9" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor" opacity=".7"/></svg>
+        <span x-text="an.is_sharp?'Sharp':'Blur'"></span>
+      </span>
+      <span class="an-chip" :class="an.is_exposed?'an-ok':'an-warn'"
+            :title="'Brightness: '+an.brightness">
+        <svg width="9" height="9" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor" opacity=".7"/></svg>
+        <span x-text="an.is_exposed?'Exp OK':an.brightness<40?'Dark':'Bright'"></span>
+      </span>
+      <span class="an-chip an-info" x-show="an.auto_adjust" title="Auto exposure active">AE</span>
+    </div>
+
+    <div class="preview-meta" x-show="camOk">
       IMX519 · <span style="color:var(--muted)">Preview</span> 960×720 · <span style="color:var(--gold)">Scan</span> 4656×3496<br>
       <span x-text="camShutterMs+'ms · f'+camFocus.toFixed(1)"></span>
     </div>
-    <div class="load-bar" x-show="prevLoading"></div>
   </div>
 
   <!-- Camera bar -->
@@ -487,9 +512,11 @@ function app(){return{
   wsOk:false, ws:null,
 
   // camera
-  prevSrc:null, prevLoading:false, prevAge:0, prevLast:null,
   xhair:true, camOk:false, capturing:false,
   camFocus:0, camShutterMs:50, camAF:true, previewRot:-90,
+  streamOk:false, streamErr:0,
+  // analysis overlay
+  an:{sharpness:0,brightness:0,is_sharp:false,is_exposed:false,auto_adjust:true,crop_box:null},
 
   // ringlight
   rlOn:false, rlBright:100,
@@ -515,10 +542,14 @@ function app(){return{
   get estMin(){return Math.ceil(this.totalPh*4/60)},
 
   /* ─ init ─ */
+  get streamUrl(){return `${this.api}/hardware/camera/stream`},
+
   async init(){
     await Promise.all([this.fetchMotors(),this.fetchCam(),this.loadLib(),this.fetchScan(),this.fetchRL()]);
-    this.startPrev();this.connectWS();
-    setInterval(()=>{if(this.prevLast)this.prevAge=Math.round((Date.now()-this.prevLast)/1000)},1000);
+    this.connectWS();
+    // Analysis polled every 3s — stream itself runs natively in the <img> tag
+    setInterval(()=>this.fetchAnalysis(),3000);
+    this.fetchAnalysis();
   },
 
   /* ─ camera ─ */
@@ -528,15 +559,16 @@ function app(){return{
       this.camFocus=d.settings?.lens_position??0;this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
     }}catch(e){}
   },
-  startPrev(){this._pTimer=setInterval(()=>this.fetchPrev(),3000);this.fetchPrev()},
-  async fetchPrev(){
-    if(this.prevLoading||!this.camOk)return;
-    this.prevLoading=true;
-    try{const r=await fetch(`${this.api}/hardware/camera/preview`,{cache:'no-store'});
-      if(r.ok){const b=await r.blob();const u=URL.createObjectURL(b);
-        if(this.prevSrc)URL.revokeObjectURL(this.prevSrc);
-        this.prevSrc=u;this.prevLast=Date.now();this.prevAge=0;}}
-    catch(e){}finally{this.prevLoading=false;}
+  async fetchAnalysis(){
+    try{const r=await fetch(`${this.api}/hardware/camera/analysis`);
+      if(r.ok){const d=await r.json();this.an=d;
+        if(d.suggested_shutter_us)this.camShutterMs=Math.round(d.suggested_shutter_us/1000);
+      }}catch(e){}
+  },
+  onStreamLoad(){this.streamOk=true;this.streamErr=0;},
+  onStreamError(){this.streamOk=false;this.streamErr++;
+    // retry stream after 2s on error
+    setTimeout(()=>{const el=this.$refs.streamImg;if(el){el.src='';el.src=this.streamUrl;}},2000);
   },
   async capturePhoto(){
     this.capturing=true;

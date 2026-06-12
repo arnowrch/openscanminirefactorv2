@@ -158,6 +158,43 @@ class CameraController:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
+    def grab_stream_frame(self) -> tuple:
+        """
+        Grab one frame for the MJPEG stream.
+        Returns (jpeg_bytes, rgb_array | None).
+        rgb_array is returned for analysis; None if not picamera2.
+        Never raises — returns empty tuple on error so stream keeps running.
+        """
+        if not _PICAM2_AVAILABLE:
+            try:
+                return self._capture_preview_rpicam(), None
+            except Exception:
+                return b"", None
+        try:
+            array = self._picam.capture_array("main")
+            from PIL import Image
+            img = Image.fromarray(array)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=72)
+            # Convert to RGB numpy for analysis (cheap, array already in memory)
+            import numpy as np
+            rgb = np.array(img)
+            return buf.getvalue(), rgb
+        except Exception as e:
+            logger.debug(f"Stream frame error: {e}")
+            return b"", None
+
+    def apply_auto_adjust(self, suggested_shutter_us=None, suggested_gain=None) -> None:
+        """Apply auto-exposure/gain suggestion from analysis pipeline."""
+        if suggested_shutter_us and _PICAM2_AVAILABLE:
+            self.settings.shutter_us = suggested_shutter_us
+            self._picam.set_controls({"ExposureTime": suggested_shutter_us})
+        if suggested_gain and _PICAM2_AVAILABLE:
+            self.settings.gain = suggested_gain
+            self._picam.set_controls({"AnalogueGain": suggested_gain})
+
     def capture_jpeg(self) -> bytes:
         """Full-resolution capture (4656×3496). Blocks until AF converges."""
         with self._lock:
