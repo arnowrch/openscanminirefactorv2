@@ -78,6 +78,7 @@ class CameraController:
         self.settings = settings or CameraSettings()
         self._busy = False
         self._lock = threading.Lock()
+        self._store = None  # SettingsStore — injected from main.py via set_settings_store()
 
         if _PICAM2_AVAILABLE:
             self._init_picamera2()
@@ -243,24 +244,60 @@ class CameraController:
         finally:
             self._busy = False
 
+    def set_settings_store(self, store) -> None:
+        """Inject a SettingsStore so setters auto-persist camera settings."""
+        self._store = store
+
+    def _persist_settings(self) -> None:
+        if self._store is None:
+            return
+        try:
+            s = self.settings
+            from openscan_mini.services.settings_store import SettingsStore
+            data = {
+                "shutter_us": s.shutter_us,
+                "gain": s.gain,
+                "jpeg_quality": s.jpeg_quality,
+                "saturation": s.saturation,
+                "contrast": s.contrast,
+                "autofocus": s.autofocus,
+                "lens_position": s.lens_position,
+                "width": s.width,
+                "height": s.height,
+            }
+            from pydantic import BaseModel
+            current = self._store.load()
+            updated = current.model_copy(update=data)
+            self._store.save(updated)
+        except Exception as e:
+            logger.warning(f"Failed to persist camera settings: {e}")
+
     def set_focus(self, lens_position: float) -> None:
         self.settings.autofocus = False
         self.settings.lens_position = max(0.0, lens_position)
         if _PICAM2_AVAILABLE:
             self._apply_focus(mode="preview")
+        self._persist_settings()
         logger.info(f"Manual focus: {self.settings.lens_position:.2f} diopters")
 
     def set_autofocus(self, enabled: bool) -> None:
         self.settings.autofocus = enabled
         if _PICAM2_AVAILABLE:
             self._apply_focus(mode="preview")
+        self._persist_settings()
         logger.info(f"Autofocus: {'on' if enabled else 'off'}")
 
-    def set_exposure(self, shutter_us: int) -> None:
+    def set_exposure(self, shutter_us: int, gain: Optional[float] = None) -> None:
         self.settings.shutter_us = max(100, shutter_us)
+        if gain is not None:
+            self.settings.gain = max(0.1, gain)
         if _PICAM2_AVAILABLE:
-            self._picam.set_controls({"ExposureTime": self.settings.shutter_us})
-        logger.info(f"Exposure: {self.settings.shutter_us}µs")
+            ctrl = {"ExposureTime": self.settings.shutter_us}
+            if gain is not None:
+                ctrl["AnalogueGain"] = self.settings.gain
+            self._picam.set_controls(ctrl)
+        self._persist_settings()
+        logger.info(f"Exposure: {self.settings.shutter_us}µs gain={self.settings.gain}")
 
     def get_status(self) -> dict:
         mode = "picamera2" if _PICAM2_AVAILABLE else f"rpicam-still ({_RPICAM_BIN})"

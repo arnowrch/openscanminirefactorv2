@@ -205,3 +205,61 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
 async def set_exposure(request: ExposureRequest) -> dict:
     _get().set_exposure(request.shutter_us)
     return {"shutter_us": request.shutter_us, "status": "ok"}
+
+
+# ── Persistent settings ───────────────────────────────────────────────────────
+
+class CameraSettingsUpdate(BaseModel):
+    shutter_us: Optional[int] = Field(default=None, ge=100, le=1_000_000)
+    gain: Optional[float] = Field(default=None, ge=0.1, le=16.0)
+    jpeg_quality: Optional[int] = Field(default=None, ge=50, le=100)
+    saturation: Optional[float] = Field(default=None, ge=0.0, le=4.0)
+    contrast: Optional[float] = Field(default=None, ge=0.0, le=4.0)
+    autofocus: Optional[bool] = None
+    lens_position: Optional[float] = Field(default=None, ge=0.0, le=32.0)
+
+
+@router.get("/settings")
+async def get_camera_settings() -> dict:
+    """Return current camera settings (live + persisted)."""
+    cam = _get()
+    s = cam.settings
+    return {
+        "shutter_us": s.shutter_us,
+        "gain": s.gain,
+        "jpeg_quality": s.jpeg_quality,
+        "saturation": s.saturation,
+        "contrast": s.contrast,
+        "autofocus": s.autofocus,
+        "lens_position": s.lens_position,
+        "width": s.width,
+        "height": s.height,
+    }
+
+
+@router.post("/settings")
+async def update_camera_settings(request: CameraSettingsUpdate) -> dict:
+    """Batch-update camera settings and persist to disk."""
+    cam = _get()
+    s = cam.settings
+
+    if request.shutter_us is not None or request.gain is not None:
+        cam.set_exposure(
+            request.shutter_us if request.shutter_us is not None else s.shutter_us,
+            request.gain,
+        )
+    if request.autofocus is not None:
+        cam.set_autofocus(request.autofocus)
+    if request.lens_position is not None and not s.autofocus:
+        cam.set_focus(request.lens_position)
+    if request.jpeg_quality is not None:
+        s.jpeg_quality = request.jpeg_quality
+    if request.saturation is not None:
+        s.saturation = request.saturation
+    if request.contrast is not None:
+        s.contrast = request.contrast
+
+    # Persist remaining fields that don't go through individual setters
+    cam._persist_settings()
+
+    return {"status": "ok", **await get_camera_settings()}

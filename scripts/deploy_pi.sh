@@ -30,6 +30,11 @@ pip install --quiet fastapi "uvicorn[standard]" pydantic aiofiles
 pip install --quiet -e ~/openscan-firmware/firmware
 
 echo ""
+echo "=== 4b. Optional: opencv for focus stacking ==="
+# Install headless opencv if not already present (non-fatal if it fails)
+pip install --quiet opencv-python-headless || echo "opencv skipped (ok)"
+
+echo ""
 echo "=== 5. Restart server ==="
 pkill -f "uvicorn.*openscan" 2>/dev/null || true
 sleep 1
