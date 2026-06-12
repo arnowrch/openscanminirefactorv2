@@ -19,9 +19,11 @@ from openscan_mini.config import HardwareConfig, setup_logging
 from openscan_mini.controllers.hardware.motors import DualMotorController
 from openscan_mini.controllers.hardware.lights import RinglightController
 from openscan_mini.controllers.hardware.camera import CameraController, CameraSettings
+from openscan_mini.controllers.scan import ScanEngine
 from openscan_mini.routers.v1.motors import router as motors_router, set_motor_controller
 from openscan_mini.routers.v1.lights import router as lights_router, set_ringlight_controller
 from openscan_mini.routers.v1.camera import router as camera_router, set_camera_controller
+from openscan_mini.routers.v1.scan import router as scan_router, set_scan_engine
 
 
 # Configure logging
@@ -108,6 +110,7 @@ async def lifespan(app: FastAPI):
         app_logger.warning(f"Ringlight init failed (non-fatal): {e}")
 
     # Camera: Arducam IMX519 (CSI ribbon cable) via rpicam-still
+    camera = None
     try:
         cam_cfg = HARDWARE_CONFIG.camera.capture_settings
         cam_settings = CameraSettings(
@@ -123,6 +126,17 @@ async def lifespan(app: FastAPI):
         app_logger.info("✓ Camera initialized — IMX519 CSI via rpicam-still")
     except Exception as e:
         app_logger.warning(f"Camera init failed (non-fatal): {e}")
+
+    # Scan engine — wires motor + camera together
+    try:
+        if MOTOR_CONTROLLER and camera:
+            scan_engine = ScanEngine(MOTOR_CONTROLLER, camera)
+            set_scan_engine(scan_engine)
+            app_logger.info("✓ Scan engine initialized")
+        else:
+            app_logger.warning("Scan engine skipped — motors or camera not ready")
+    except Exception as e:
+        app_logger.warning(f"Scan engine init failed (non-fatal): {e}")
 
     app_logger.info("✓ FastAPI application ready")
     app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
@@ -166,6 +180,7 @@ app.add_middleware(
 app.include_router(motors_router)
 app.include_router(lights_router)
 app.include_router(camera_router)
+app.include_router(scan_router)
 
 
 # ============================================================================
