@@ -132,6 +132,51 @@ class CameraController:
             except Exception:
                 pass
 
+    def capture_preview(self) -> bytes:
+        """
+        Fast low-resolution preview capture (960×720, AF off).
+
+        Faster than capture_jpeg() because lower resolution means less
+        JPEG encoding time. AF disabled to avoid waiting for focus sweep.
+        """
+        if self._busy:
+            raise RuntimeError("Camera is already capturing.")
+        if not _RPICAM_BIN:
+            raise RuntimeError("rpicam-still not found.")
+
+        self._busy = True
+        tmp_path = None
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            cmd = [
+                _RPICAM_BIN,
+                "--output", tmp_path,
+                "--timeout", "500",
+                "--nopreview", "--immediate",
+                "--width", "960", "--height", "720",
+                "--autofocus-mode", "manual",
+                "--lens-position", f"{self.settings.lens_position:.4f}",
+                "--quality", "75",
+                "--encoding", "jpg",
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                raise RuntimeError(f"Preview failed: {result.stderr.strip()}")
+
+            data = Path(tmp_path).read_bytes()
+            logger.debug(f"Preview: {len(data):,} bytes @ 960×720")
+            return data
+        finally:
+            self._busy = False
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink()
+                except Exception:
+                    pass
+
     def set_focus(self, lens_position: float) -> None:
         """
         Set manual focus lens position.

@@ -75,6 +75,16 @@ async def move_both_motors(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{motor_id}/jog", response_model=MotorStatus)
+async def jog_motor(motor_id: str, delta: float = 0.0) -> MotorStatus:
+    """Jog motor by delta degrees relative to current position."""
+    motor = _get_motor(motor_id)
+    try:
+        return await motor.move_by(delta)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/reset")
 async def reset_motors() -> dict:
     """Move both motors to 0°."""

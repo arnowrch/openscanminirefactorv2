@@ -44,6 +44,19 @@ async def get_camera_status() -> dict:
     return _get().get_status()
 
 
+@router.get("/preview")
+async def preview_jpeg():
+    """Fast low-resolution preview (960×720, AF off). Used by live UI preview."""
+    cam = _get()
+    if cam._busy:
+        raise HTTPException(status_code=503, detail="Camera busy")
+    try:
+        data = cam.capture_preview()
+        return Response(content=data, media_type="image/jpeg")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @router.post("/capture")
 async def capture_jpeg():
     """Capture a single JPEG from the IMX519 and return as image/jpeg."""

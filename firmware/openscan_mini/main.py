@@ -13,7 +13,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from openscan_mini.config import HardwareConfig, setup_logging
 from openscan_mini.controllers.hardware.motors import DualMotorController
@@ -182,6 +183,19 @@ app.include_router(motors_router)
 app.include_router(lights_router)
 app.include_router(camera_router)
 app.include_router(scan_router)
+
+# Serve UI — static/index.html at /
+_static_dir = Path(__file__).parent.parent.parent / "static"
+if _static_dir.exists():
+    app.mount("/ui", StaticFiles(directory=str(_static_dir), html=True), name="static")
+
+@app.get("/")
+async def root():
+    """Redirect root to the UI."""
+    ui = _static_dir / "index.html"
+    if ui.exists():
+        return FileResponse(str(ui))
+    return JSONResponse({"message": "OpenScan Mini API", "docs": "/docs", "ui": "static/index.html not found"})
 
 
 # ============================================================================

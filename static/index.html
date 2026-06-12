@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenScan Mini</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07070f;--surface:#0d0d1a;--card:#131326;--card2:#18182e;
+  --border:rgba(255,255,255,0.055);--border-lit:rgba(129,140,248,0.38);
+  --accent:#818cf8;--accent-b:#a5b4fc;--accent-glow:rgba(129,140,248,0.18);
+  --gold:#fbbf24;--gold-glow:rgba(251,191,36,0.14);
+  --emerald:#34d399;--red:#f87171;--orange:#fb923c;
+  --text:#f0f0ff;--dim:#8888aa;--muted:#44446a;
+  --r:12px;--rs:8px;--tr:0.17s ease;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(129,140,248,0.018) 1px,transparent 1px),linear-gradient(90deg,rgba(129,140,248,0.018) 1px,transparent 1px);background-size:48px 48px;pointer-events:none;z-index:0}
+
+/* ── HEADER ── */
+.hdr{position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:14px;padding:0 20px;height:52px;background:rgba(7,7,15,0.88);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;letter-spacing:-.02em}
+.logo-icon{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#818cf8);display:flex;align-items:center;justify-content:center;box-shadow:0 0 14px rgba(99,102,241,0.45)}
+.spacer{flex:1}
+.chip{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+.chip.live{background:rgba(52,211,153,0.1);color:var(--emerald)}
+.chip.off{background:rgba(248,113,113,0.1);color:var(--red)}
+.chip.scan{background:var(--accent-glow);color:var(--accent-b)}
+.dot{width:5px;height:5px;border-radius:50%}
+.dot.live{background:var(--emerald);box-shadow:0 0 5px var(--emerald);animation:pulse 2s infinite}
+.dot.off{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── LAYOUT ── */
+.grid{display:grid;grid-template-columns:1fr 352px;min-height:calc(100vh - 52px);position:relative;z-index:1}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+
+/* ── CAMERA PANEL ── */
+.cam-panel{display:flex;flex-direction:column;border-right:1px solid var(--border)}
+.preview-wrap{position:relative;background:#000;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:clamp(280px,48vh,540px)}
+.preview-img{width:100%;height:100%;object-fit:contain;transition:opacity .25s ease;display:block}
+.ph{display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--muted)}
+
+/* Crosshair */
+.xhair{position:absolute;inset:0;pointer-events:none}
+.xhair::before,.xhair::after{content:'';position:absolute;background:rgba(129,140,248,.55)}
+.xhair::before{left:50%;top:8%;bottom:8%;width:1px;transform:translateX(-50%)}
+.xhair::after{top:50%;left:8%;right:8%;height:1px;transform:translateY(-50%)}
+.xhair-dot{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border:1.5px solid var(--accent);border-radius:50%}
+.corner{position:absolute;width:18px;height:18px;border-color:rgba(129,140,248,.45);border-style:solid}
+.tl{top:14px;left:14px;border-width:2px 0 0 2px}.tr{top:14px;right:14px;border-width:2px 2px 0 0}
+.bl{bottom:14px;left:14px;border-width:0 0 2px 2px}.br{bottom:14px;right:14px;border-width:0 2px 2px 0}
+.badge{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);font-size:9px;font-family:var(--mono);font-weight:600;letter-spacing:.1em;color:var(--emerald)}
+.preview-meta{position:absolute;bottom:10px;right:10px;text-align:right;font-size:9px;font-family:var(--mono);color:rgba(255,255,255,.32);line-height:1.6}
+.load-bar{position:absolute;bottom:0;left:0;height:2px;background:var(--accent);box-shadow:0 0 7px var(--accent);animation:loadslide 1.2s ease-in-out infinite}
+@keyframes loadslide{0%{left:0;right:100%}50%{left:0;right:0}100%{left:100%;right:0}}
+
+/* Camera settings bar */
+.cam-bar{padding:14px 18px;border-top:1px solid var(--border);background:var(--surface);display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:14px;align-items:end}
+@media(max-width:600px){.cam-bar{grid-template-columns:1fr 1fr}}
+
+/* ── CONTROLS PANEL ── */
+.ctrl{display:flex;flex-direction:column;background:var(--surface);overflow-y:auto;max-height:calc(100vh - 52px)}
+
+/* Widget */
+.wgt{padding:18px;border-bottom:1px solid var(--border)}
+.wgt-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.wgt-title{font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+/* Angle display */
+.ang-lbl{font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:3px}
+.ang{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:-.02em;line-height:1;margin-bottom:14px}
+.ang .u{font-size:17px;color:var(--muted);font-weight:400}
+
+/* Step selector */
+.steps{display:flex;gap:4px;margin-bottom:11px}
+.step-btn{flex:1;padding:5px 2px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all var(--tr);text-align:center}
+.step-btn.on{background:var(--accent-glow);border-color:var(--accent);color:var(--accent-b)}
+
+/* Jog */
+.jog2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.jbtn{padding:9px 4px;border:1px solid var(--border);border-radius:var(--rs);background:var(--card);color:var(--text);font-family:var(--mono);font-size:11px;font-weight:500;cursor:pointer;transition:all var(--tr);text-align:center;user-select:none;touch-action:none}
+.jbtn:hover{background:var(--card2);border-color:var(--border-lit);color:var(--accent-b)}
+.jbtn:active,.jbtn.pressed{background:var(--accent-glow);border-color:var(--accent);box-shadow:0 0 10px var(--accent-glow)}
+
+/* Rotor tags */
+.tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;min-height:30px}
+.tag{display:flex;align-items:center;gap:3px;padding:4px 8px;border-radius:6px;background:var(--card);border:1px solid var(--border);font-family:var(--mono);font-size:11px}
+.tag-x{cursor:pointer;color:var(--muted);font-size:13px;line-height:1}
+.tag-x:hover{color:var(--red)}
+.add-row{display:flex;gap:5px;margin-bottom:14px}
+
+/* Estimate */
+.est{font-size:10px;color:var(--muted);margin-bottom:14px;font-family:var(--mono)}
+.est strong{color:var(--gold);font-weight:600}
+
+/* Scan button */
+.scan-btn{width:100%;padding:13px;font-size:12px;border-radius:var(--r);background:linear-gradient(135deg,#6366f1,#818cf8);color:#fff;font-weight:700;letter-spacing:.05em;border:none;cursor:pointer;transition:all var(--tr);box-shadow:0 4px 22px rgba(99,102,241,.38)}
+.scan-btn:hover{transform:translateY(-1px);box-shadow:0 8px 32px rgba(99,102,241,.58)}
+.scan-btn:active{transform:translateY(0)}
+.scan-btn.stop{background:linear-gradient(135deg,#dc2626,#f87171);box-shadow:0 4px 22px rgba(220,38,38,.4)}
+.scan-btn:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+
+/* Progress ring */
+.ring-wrap{position:relative;width:118px;height:118px;margin:4px auto 16px}
+.ring-svg{transform:rotate(-90deg)}
+.ring-track{fill:none;stroke:var(--border);stroke-width:4}
+.ring-fill{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;transition:stroke-dashoffset .5s ease;filter:drop-shadow(0 0 4px var(--accent))}
+.ring-center{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ring-pct{font-family:var(--mono);font-size:22px;font-weight:600}
+.ring-sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
+
+/* Stats grid */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stat-lbl{font-size:9px;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;margin-bottom:2px}
+.stat-val{font-family:var(--mono);font-size:13px;font-weight:600}
+.stat-val.a{color:var(--accent-b)}.stat-val.g{color:var(--gold)}.stat-val.e{color:var(--emerald)}
+
+/* ── LIBRARY ── */
+.lib{position:relative;z-index:1;padding:22px;border-top:1px solid var(--border);background:var(--bg)}
+.lib-hdr{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+.sec-ttl{font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.s-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:15px;cursor:pointer;transition:all var(--tr)}
+.s-card:hover{background:var(--card2);border-color:var(--border-lit);transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.s-card.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 18px var(--accent-glow)}
+.s-id{font-family:var(--mono);font-size:11px;font-weight:600;margin-bottom:7px;word-break:break-all}
+.s-meta{display:flex;gap:6px;flex-wrap:wrap}
+.mc{font-size:9px;color:var(--muted);background:rgba(255,255,255,.04);padding:2px 6px;border-radius:4px}
+.s-actions{display:flex;gap:5px;margin-top:10px}
+
+/* Photo grid */
+.pgwrap{margin-top:14px;padding:18px;background:var(--card);border:1px solid var(--border);border-radius:var(--r)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;max-height:280px;overflow-y:auto;margin-top:10px}
+.pthumb{aspect-ratio:4/3;background:var(--bg);border-radius:4px;border:1px solid var(--border);overflow:hidden;cursor:pointer;transition:all var(--tr)}
+.pthumb:hover{border-color:var(--accent);transform:scale(1.03)}
+.pthumb img{width:100%;height:100%;object-fit:cover}
+.pname{font-size:8px;font-family:var(--mono);color:var(--muted);text-align:center;padding:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── SHARED ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:7px 14px;border-radius:var(--rs);font-size:11px;font-weight:600;cursor:pointer;transition:all var(--tr);border:none;letter-spacing:.02em;font-family:var(--sans)}
+.btn-p{background:var(--accent);color:#fff;box-shadow:0 2px 10px var(--accent-glow)}
+.btn-p:hover{background:var(--accent-b);box-shadow:0 4px 18px rgba(129,140,248,.5)}
+.btn-p:disabled{opacity:.4;cursor:not-allowed}
+.btn-g{background:transparent;color:var(--dim);border:1px solid var(--border)}
+.btn-g:hover{background:var(--card);color:var(--text);border-color:var(--border-lit)}
+.btn-d{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.28)}
+.btn-d:hover{background:rgba(248,113,113,.1);border-color:var(--red)}
+.fg{display:flex;flex-direction:column;gap:5px}
+.lbl{font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.inp{width:100%;padding:7px 9px;background:var(--card);border:1px solid var(--border);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:12px;transition:all var(--tr)}
+.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow)}
+.rrow{display:flex;align-items:center;gap:7px}
+.rval{font-family:var(--mono);font-size:10px;color:var(--accent-b);min-width:46px;text-align:right}
+input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border-lit);border-radius:2px}
+[x-cloak]{display:none!important}
+.flex{display:flex}.aic{align-items:center}.jb{justify-content:space-between}.g2{gap:8px}.g3{gap:12px}.mt2{margin-top:8px}.mt3{margin-top:12px}.mono{font-family:var(--mono)}.xs{font-size:10px}.muted{color:var(--muted)}.rel{position:relative}
+
+/* Toasts */
+.toasts{position:fixed;top:62px;right:14px;z-index:500;display:flex;flex-direction:column;gap:7px;pointer-events:none}
+.toast{padding:9px 13px;border-radius:var(--rs);background:var(--card);border:1px solid var(--border);font-size:11px;box-shadow:0 4px 20px rgba(0,0,0,.45);pointer-events:auto;max-width:260px}
+.toast.success{border-color:var(--emerald);color:var(--emerald)}.toast.error{border-color:var(--red);color:var(--red)}
+.toast.info{border-color:var(--accent);color:var(--accent-b)}.toast.warning{border-color:var(--gold);color:var(--gold)}
+</style>
+</head>
+
+<body x-data="app()" x-init="init()" x-cloak>
+
+<!-- TOASTS -->
+<div class="toasts">
+  <template x-for="t in toasts" :key="t.id">
+    <div class="toast" :class="t.type" x-text="t.msg" x-show="t.vis" x-transition.opacity></div>
+  </template>
+</div>
+
+<!-- HEADER -->
+<header class="hdr">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+        <circle cx="8" cy="8" r="3" stroke="white" stroke-width="1.5"/>
+        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.1 3.1l1.4 1.4M11.5 11.5l1.4 1.4M11.5 3.1l-1.4 1.4M4.5 11.5l-1.4 1.4" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    OPENSCAN MINI
+  </div>
+  <div class="spacer"></div>
+  <div class="chip" :class="wsOk ? 'live' : 'off'">
+    <div class="dot" :class="wsOk ? 'live' : 'off'"></div>
+    <span x-text="wsOk ? 'LIVE' : 'OFFLINE'"></span>
+  </div>
+  <div class="chip scan" x-show="scanState==='running'" x-transition>
+    <div class="dot live"></div> SCANNING
+  </div>
+  <span class="xs muted mono">v0.2.0</span>
+</header>
+
+<!-- MAIN GRID -->
+<div class="grid">
+
+<!-- ═══ CAMERA PANEL ═══ -->
+<section class="cam-panel">
+  <div class="preview-wrap">
+    <img x-show="prevSrc" :src="prevSrc" class="preview-img" :style="prevLoading?'opacity:.65':'opacity:1'" alt="preview">
+    <div class="ph" x-show="!prevSrc">
+      <svg width="44" height="44" viewBox="0 0 48 48" fill="none" opacity=".25">
+        <rect x="6" y="12" width="36" height="28" rx="3" stroke="currentColor" stroke-width="2"/>
+        <circle cx="24" cy="26" r="7" stroke="currentColor" stroke-width="2"/>
+        <rect x="17" y="8" width="6" height="4" rx="1" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      <span class="xs" x-text="camOk?'Initializing…':'Camera unavailable'"></span>
+    </div>
+
+    <!-- Crosshair -->
+    <div class="xhair" x-show="xhair && prevSrc"><div class="xhair-dot"></div></div>
+    <template x-if="prevSrc">
+      <div><div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div></div>
+    </template>
+
+    <div class="badge" x-show="prevSrc">
+      <div class="dot live"></div>
+      <span x-text="prevAge+'s'"></span>
+    </div>
+    <div class="preview-meta" x-show="prevSrc">
+      IMX519 · 960×720<br>
+      <span x-text="camShutterMs+'ms · f'+camFocus.toFixed(1)"></span>
+    </div>
+    <div class="load-bar" x-show="prevLoading"></div>
+  </div>
+
+  <!-- Camera bar -->
+  <div class="cam-bar">
+    <div class="fg">
+      <label class="lbl">Focus (diopters)</label>
+      <div class="rrow">
+        <input type="range" min="0" max="15" step="0.1" x-model.number="camFocus" @change="setFocus(camFocus)">
+        <span class="rval" x-text="camFocus.toFixed(1)+'d'"></span>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="lbl">Exposure</label>
+      <div class="rrow">
+        <input type="range" min="1" max="500" step="1" x-model.number="camShutterMs" @change="setExposure(camShutterMs*1000)">
+        <span class="rval" x-text="camShutterMs+'ms'"></span>
+      </div>
+    </div>
+    <div class="fg">
+      <label class="lbl">Options</label>
+      <div class="flex g2" style="margin-top:3px">
+        <button class="btn" :class="camAF?'btn-p':'btn-g'" style="font-size:10px;padding:5px 9px" @click="toggleAF()">
+          <span x-text="camAF?'AF ●':'AF ○'"></span>
+        </button>
+        <button class="btn btn-g" style="font-size:10px;padding:5px 9px" @click="xhair=!xhair" title="Toggle crosshair">┼</button>
+      </div>
+    </div>
+    <button class="btn btn-p" @click="capturePhoto()" :disabled="!camOk||capturing" style="height:fit-content;align-self:end">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="3" fill="currentColor"/><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.5"/></svg>
+      <span x-text="capturing?'…':'Capture'"></span>
+    </button>
+  </div>
+</section>
+
+<!-- ═══ CONTROLS PANEL ═══ -->
+<aside class="ctrl">
+
+  <!-- ROTOR -->
+  <div class="wgt">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Camera Arm · Rotor</span>
+      <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('rotor')">HOME</button>
+    </div>
+    <div class="ang-lbl">POSITION</div>
+    <div class="ang"><span x-text="rotorAng.toFixed(1)"></span><span class="u">°</span></div>
+    <div class="steps">
+      <template x-for="s in [0.1,1,5,10]">
+        <button class="step-btn" :class="rotorStep===s?'on':''" @click="rotorStep=s" x-text="s+'°'"></button>
+      </template>
+    </div>
+    <div class="jog2">
+      <button class="jbtn" @mousedown="jog0('rotor',-rotorStep)" @mouseup="stopJ()" @mouseleave="stopJ()" @touchstart.prevent="jog0('rotor',-rotorStep)" @touchend="stopJ()">
+        ↑ <span class="mono" x-text="'-'+rotorStep+'°'"></span>
+      </button>
+      <button class="jbtn" @mousedown="jog0('rotor',rotorStep)" @mouseup="stopJ()" @mouseleave="stopJ()" @touchstart.prevent="jog0('rotor',rotorStep)" @touchend="stopJ()">
+        ↓ <span class="mono" x-text="'+'+rotorStep+'°'"></span>
+      </button>
+    </div>
+    <div class="xs muted mt2">Range: <span class="mono" x-text="rotorMin+'° … '+rotorMax+'°'"></span></div>
+  </div>
+
+  <!-- TURNTABLE -->
+  <div class="wgt">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Object Platform · Turntable</span>
+      <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('turntable')">HOME</button>
+    </div>
+    <div class="ang-lbl">POSITION</div>
+    <div class="ang"><span x-text="tableAng.toFixed(1)"></span><span class="u">°</span></div>
+    <div class="steps">
+      <template x-for="s in [1,5,15,45]">
+        <button class="step-btn" :class="tableStep===s?'on':''" @click="tableStep=s" x-text="s+'°'"></button>
+      </template>
+    </div>
+    <div class="jog2">
+      <button class="jbtn" @mousedown="jog0('turntable',-tableStep)" @mouseup="stopJ()" @mouseleave="stopJ()" @touchstart.prevent="jog0('turntable',-tableStep)" @touchend="stopJ()">
+        ↺ <span class="mono" x-text="'-'+tableStep+'°'"></span>
+      </button>
+      <button class="jbtn" @mousedown="jog0('turntable',tableStep)" @mouseup="stopJ()" @mouseleave="stopJ()" @touchstart.prevent="jog0('turntable',tableStep)" @touchend="stopJ()">
+        ↻ <span class="mono" x-text="'+'+tableStep+'°'"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- SCAN CONFIG (hidden while running) -->
+  <div class="wgt" x-show="scanState==='idle'||scanState==='done'||scanState==='cancelled'||scanState==='failed'">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Scan Configuration</span>
+      <span class="xs muted mono" x-text="totalPh+' photos'"></span>
+    </div>
+
+    <div class="lbl" style="margin-bottom:6px">Rotor Angles</div>
+    <div class="tags">
+      <template x-for="(a,i) in cfg.angles" :key="i">
+        <div class="tag"><span class="mono" x-text="a+'°'"></span><span class="tag-x" @click="cfg.angles.splice(i,1)">×</span></div>
+      </template>
+    </div>
+    <div class="add-row">
+      <input class="inp" type="number" placeholder="e.g. 20" step="5" x-model.number="newAng" style="flex:1" @keydown.enter="addAng()">
+      <button class="btn btn-g" @click="addAng()">+ Add</button>
+    </div>
+
+    <div class="fg" style="margin-bottom:10px">
+      <label class="lbl">Turntable Steps / position</label>
+      <div class="rrow">
+        <input type="range" min="4" max="72" step="4" x-model.number="cfg.steps">
+        <span class="rval" x-text="cfg.steps"></span>
+      </div>
+      <span class="xs muted" x-text="(360/cfg.steps).toFixed(1)+'° per step'"></span>
+    </div>
+
+    <div class="fg" style="margin-bottom:14px">
+      <label class="lbl">Settle Time</label>
+      <div class="rrow">
+        <input type="range" min="0" max="2000" step="50" x-model.number="cfg.settle">
+        <span class="rval" x-text="cfg.settle+'ms'"></span>
+      </div>
+    </div>
+
+    <div class="est"><strong x-text="totalPh"></strong> photos · <strong x-text="estMin"></strong> min est.</div>
+
+    <button class="scan-btn" @click="startScan()" :disabled="cfg.angles.length===0||!camOk">
+      ▶ START SCAN
+    </button>
+  </div>
+
+  <!-- PROGRESS -->
+  <div class="wgt" x-show="scanState==='running'">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Scan in Progress</span>
+      <button class="btn btn-d" style="padding:3px 9px;font-size:9px" @click="stopScan()">■ STOP</button>
+    </div>
+    <div class="ring-wrap">
+      <svg class="ring-svg" width="118" height="118" viewBox="0 0 118 118">
+        <circle class="ring-track" cx="59" cy="59" r="51"/>
+        <circle class="ring-fill" cx="59" cy="59" r="51"
+          :stroke-dasharray="2*Math.PI*51"
+          :stroke-dashoffset="2*Math.PI*51*(1-(sp?.percent||0)/100)"/>
+      </svg>
+      <div class="ring-center">
+        <div class="ring-pct" x-text="(sp?.percent||0).toFixed(0)+'%'"></div>
+        <div class="ring-sub" x-text="(sp?.captured||0)+'/'+(sp?.total||0)"></div>
+      </div>
+    </div>
+    <div class="stats">
+      <div><div class="stat-lbl">Rotor</div><div class="stat-val a" x-text="(sp?.current_rotor||0).toFixed(1)+'°'"></div></div>
+      <div><div class="stat-lbl">Turntable</div><div class="stat-val a" x-text="(sp?.current_turntable||0).toFixed(1)+'°'"></div></div>
+      <div><div class="stat-lbl">Elapsed</div><div class="stat-val" x-text="fmtT(sp?.elapsed_s||0)"></div></div>
+      <div><div class="stat-lbl">ETA</div><div class="stat-val g" x-text="sp?.eta_s?fmtT(sp.eta_s):'—'"></div></div>
+    </div>
+    <div class="mono xs muted mt2" style="word-break:break-all" x-text="sp?.current_file||''"></div>
+  </div>
+
+  <!-- DONE -->
+  <div class="wgt" x-show="scanState==='done'" x-transition>
+    <div style="text-align:center;padding:6px 0">
+      <div style="font-size:26px;margin-bottom:8px">✓</div>
+      <div style="color:var(--emerald);font-weight:600;font-size:12px" x-text="'Done — '+(sp?.captured||0)+' photos'"></div>
+      <div class="xs muted mt2" x-text="fmtT(sp?.elapsed_s||0)+' elapsed'"></div>
+      <button class="btn btn-g" style="margin-top:12px;width:100%" @click="scanState='idle';loadLib()">New Scan</button>
+    </div>
+  </div>
+
+</aside>
+</div>
+
+<!-- ═══ LIBRARY ═══ -->
+<section class="lib">
+  <div class="lib-hdr">
+    <span class="sec-ttl">Scan Library</span>
+    <span class="xs muted" x-text="scans.length+' scans'"></span>
+    <div class="spacer"></div>
+    <button class="btn btn-g" style="font-size:10px;padding:4px 9px" @click="loadLib()">↻ Refresh</button>
+  </div>
+
+  <div class="xs muted" style="padding:20px 0;text-align:center" x-show="scans.length===0">
+    No scans yet. Configure and run your first scan above.
+  </div>
+
+  <div class="lib-grid">
+    <template x-for="s in scans" :key="s.scan_id">
+      <div class="s-card" :class="selScan===s.scan_id?'sel':''" @click="pickScan(s.scan_id)">
+        <div class="s-id" x-text="s.scan_id"></div>
+        <div class="s-meta">
+          <span class="mc" x-text="s.photo_count+' photos'"></span>
+          <span class="mc" x-text="s.size_mb+' MB'"></span>
+        </div>
+        <div class="s-actions" @click.stop>
+          <button class="btn btn-g" style="flex:1;font-size:9px;padding:4px" @click="pickScan(s.scan_id)">Browse</button>
+          <button class="btn btn-d" style="font-size:9px;padding:4px 7px" @click="delScan(s.scan_id)">Del</button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Photo browser -->
+  <div class="pgwrap" x-show="selScan&&selFiles.length>0" x-cloak x-transition>
+    <div class="flex aic jb">
+      <span class="sec-ttl" x-text="selScan"></span>
+      <div class="flex g2">
+        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="dlAll()">↓ All</button>
+        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="selScan=null">✕</button>
+      </div>
+    </div>
+    <div class="pgrid">
+      <template x-for="f in selFiles" :key="f.filename">
+        <div>
+          <div class="pthumb" @click="openPhoto(f.filename)">
+            <img :src="api+'/scan/library/'+selScan+'/'+f.filename" loading="lazy" alt="">
+          </div>
+          <div class="pname" x-text="f.filename"></div>
+        </div>
+      </template>
+    </div>
+  </div>
+</section>
+
+<script>
+function app(){return{
+  api:`${location.protocol}//${location.hostname}:8000/api/v1`,
+  wsUrl:`ws://${location.hostname}:8000/api/v1/scan/ws`,
+
+  // connection
+  wsOk:false, ws:null,
+
+  // camera
+  prevSrc:null, prevLoading:false, prevAge:0, prevLast:null,
+  xhair:true, camOk:false, capturing:false,
+  camFocus:0, camShutterMs:50, camAF:true,
+
+  // motors
+  rotorAng:0, rotorStep:5, rotorMin:-20, rotorMax:60,
+  tableAng:0, tableStep:15,
+  _jogTimer:null,
+
+  // scan
+  scanState:'idle', sp:null,
+  cfg:{angles:[-20,0,20,40], steps:24, settle:300},
+  newAng:'',
+
+  // library
+  scans:[], selScan:null, selFiles:[],
+
+  // toasts
+  toasts:[], _tid:0,
+
+  /* ─ computed ─ */
+  get totalPh(){return this.cfg.angles.length*this.cfg.steps},
+  get estMin(){return Math.ceil(this.totalPh*4/60)},
+
+  /* ─ init ─ */
+  async init(){
+    await Promise.all([this.fetchMotors(),this.fetchCam(),this.loadLib(),this.fetchScan()]);
+    this.startPrev();this.connectWS();
+    setInterval(()=>{if(this.prevLast)this.prevAge=Math.round((Date.now()-this.prevLast)/1000)},1000);
+  },
+
+  /* ─ camera ─ */
+  async fetchCam(){
+    try{const r=await fetch(`${this.api}/hardware/camera/`);if(r.ok){const d=await r.json();
+      this.camOk=d.available;this.camAF=d.settings?.autofocus??true;
+      this.camFocus=d.settings?.lens_position??0;this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
+    }}catch(e){}
+  },
+  startPrev(){this._pTimer=setInterval(()=>this.fetchPrev(),3000);this.fetchPrev()},
+  async fetchPrev(){
+    if(this.prevLoading||!this.camOk)return;
+    this.prevLoading=true;
+    try{const r=await fetch(`${this.api}/hardware/camera/preview`,{cache:'no-store'});
+      if(r.ok){const b=await r.blob();const u=URL.createObjectURL(b);
+        if(this.prevSrc)URL.revokeObjectURL(this.prevSrc);
+        this.prevSrc=u;this.prevLast=Date.now();this.prevAge=0;}}
+    catch(e){}finally{this.prevLoading=false;}
+  },
+  async capturePhoto(){
+    this.capturing=true;
+    try{const r=await fetch(`${this.api}/hardware/camera/capture`,{method:'POST'});
+      if(r.ok){const b=await r.blob();const u=URL.createObjectURL(b);
+        const a=document.createElement('a');a.href=u;a.download=`openscan_${Date.now()}.jpg`;a.click();URL.revokeObjectURL(u);
+        this.toast('Photo downloaded','success');}else this.toast('Capture failed','error');
+    }catch(e){this.toast('Error: '+e.message,'error');}finally{this.capturing=false;}
+  },
+  async setFocus(v){try{await fetch(`${this.api}/hardware/camera/focus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lens_position:parseFloat(v)})})}catch(e){}},
+  async setExposure(us){try{await fetch(`${this.api}/hardware/camera/exposure`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shutter_us:Math.round(us)})})}catch(e){}},
+  async toggleAF(){this.camAF=!this.camAF;try{await fetch(`${this.api}/hardware/camera/autofocus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:this.camAF})})}catch(e){}},
+
+  /* ─ motors ─ */
+  async fetchMotors(){
+    try{const r=await fetch(`${this.api}/hardware/motors`);if(r.ok){const d=await r.json();
+      this.rotorAng=d.motors?.rotor?.current_angle??0;this.tableAng=d.motors?.turntable?.current_angle??0;
+      this.rotorMin=d.motors?.rotor?.min_angle??-20;this.rotorMax=d.motors?.rotor?.max_angle??60;}}catch(e){}
+  },
+  jog0(m,d){this.sendJog(m,d);this._jogTimer=setInterval(()=>this.sendJog(m,d),380)},
+  stopJ(){clearInterval(this._jogTimer);this._jogTimer=null},
+  async sendJog(m,d){
+    try{const r=await fetch(`${this.api}/hardware/motors/${m}/jog?delta=${d}`,{method:'POST'});
+      if(r.ok){const j=await r.json();if(m==='rotor')this.rotorAng=j.current_angle??this.rotorAng;else this.tableAng=j.current_angle??this.tableAng;}}catch(e){}
+  },
+  async home(m){
+    try{await fetch(`${this.api}/hardware/motors/${m}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({angle:0})});
+      if(m==='rotor')this.rotorAng=0;else this.tableAng=0;this.toast(m+' → 0°','info');}catch(e){}
+  },
+
+  /* ─ scan ─ */
+  addAng(){const v=parseFloat(this.newAng);if(!isNaN(v)&&!this.cfg.angles.includes(v)){this.cfg.angles.push(v);this.cfg.angles.sort((a,b)=>a-b);}this.newAng=''},
+  async fetchScan(){try{const r=await fetch(`${this.api}/scan/`);if(r.ok){const d=await r.json();this.scanState=d.state||'idle';if(d.state!=='idle')this.sp=d;}}catch(e){}},
+  async startScan(){
+    try{const r=await fetch(`${this.api}/scan/start`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({rotor_angles:this.cfg.angles,turntable_steps:this.cfg.steps,settle_ms:this.cfg.settle})});
+      if(r.ok){const d=await r.json();this.scanState='running';this.toast('Scan started — '+d.total_photos+' photos','success');}
+      else{const e=await r.json();this.toast('Error: '+e.detail,'error');}
+    }catch(e){this.toast('Failed: '+e.message,'error');}
+  },
+  async stopScan(){try{await fetch(`${this.api}/scan/stop`,{method:'POST'});this.toast('Stop requested','warning');}catch(e){}},
+
+  /* ─ websocket ─ */
+  connectWS(){
+    try{this.ws=new WebSocket(this.wsUrl);
+      this.ws.onopen=()=>{this.wsOk=true};
+      this.ws.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.type)return;
+        if(d.state){this.scanState=d.state;this.sp=d;
+          if(d.state==='done'){this.toast('Scan done — '+d.captured+' photos in '+this.fmtT(d.elapsed_s),'success');this.loadLib();}
+          else if(d.state==='failed')this.toast('Scan failed: '+(d.error||'unknown'),'error');}};
+      this.ws.onclose=()=>{this.wsOk=false;setTimeout(()=>this.connectWS(),3000)};
+      this.ws.onerror=()=>{this.wsOk=false};
+    }catch(e){setTimeout(()=>this.connectWS(),3000);}
+  },
+
+  /* ─ library ─ */
+  async loadLib(){try{const r=await fetch(`${this.api}/scan/library`);if(r.ok){const d=await r.json();this.scans=d.scans||[];}}catch(e){}},
+  async pickScan(id){
+    if(this.selScan===id){this.selScan=null;this.selFiles=[];return;}
+    this.selScan=id;
+    try{const r=await fetch(`${this.api}/scan/library/${id}`);if(r.ok){const d=await r.json();this.selFiles=d.files||[];}}catch(e){}
+  },
+  async delScan(id){
+    if(!confirm('Delete scan "'+id+'"?'))return;
+    try{const r=await fetch(`${this.api}/scan/library/${id}`,{method:'DELETE'});
+      if(r.ok){this.scans=this.scans.filter(s=>s.scan_id!==id);if(this.selScan===id){this.selScan=null;this.selFiles=[];}this.toast('Deleted','info');}}catch(e){}
+  },
+  openPhoto(fn){window.open(`${this.api}/scan/library/${this.selScan}/${fn}`)},
+  dlAll(){for(const f of this.selFiles){const a=document.createElement('a');a.href=`${this.api}/scan/library/${this.selScan}/${f.filename}`;a.download=f.filename;a.click();}},
+
+  /* ─ utils ─ */
+  fmtT(s){if(!s)return'0s';const m=Math.floor(s/60),sec=Math.round(s%60);return m>0?m+'m '+sec+'s':sec+'s'},
+  toast(msg,type='info'){const id=++this._tid;this.toasts.push({id,msg,type,vis:true});
+    setTimeout(()=>{const t=this.toasts.find(t=>t.id===id);if(t)t.vis=false;setTimeout(()=>{this.toasts=this.toasts.filter(t=>t.id!==id)},300)},3500);}
+}}
+</script>
+</body>
+</html>
