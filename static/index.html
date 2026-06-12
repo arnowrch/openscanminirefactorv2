@@ -207,7 +207,9 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 <!-- ═══ CAMERA PANEL ═══ -->
 <section class="cam-panel">
   <div class="preview-wrap">
-    <img x-show="prevSrc" :src="prevSrc" class="preview-img" :style="prevLoading?'opacity:.65':'opacity:1'" alt="preview">
+    <img x-show="prevSrc" :src="prevSrc" class="preview-img"
+         :style="'transform:rotate('+previewRot+'deg);transition:transform .2s ease,opacity .25s ease;'+(prevLoading?'opacity:.65':'opacity:1')"
+         alt="preview">
     <div class="ph" x-show="!prevSrc">
       <svg width="44" height="44" viewBox="0 0 48 48" fill="none" opacity=".25">
         <rect x="6" y="12" width="36" height="28" rx="3" stroke="currentColor" stroke-width="2"/>
@@ -257,6 +259,11 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
           <span x-text="camAF?'AF ●':'AF ○'"></span>
         </button>
         <button class="btn btn-g" style="font-size:10px;padding:5px 9px" @click="xhair=!xhair" title="Toggle crosshair">┼</button>
+      </div>
+      <div class="flex g2" style="margin-top:6px">
+        <template x-for="r in [-90,0,90,180]">
+          <button class="btn" :class="previewRot===r?'btn-p':'btn-g'" style="font-size:9px;padding:4px 7px;min-width:36px" @click="previewRot=r" x-text="r+'°'"></button>
+        </template>
       </div>
     </div>
     <button class="btn btn-p" @click="capturePhoto()" :disabled="!camOk||capturing" style="height:fit-content;align-self:end">
@@ -313,6 +320,28 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
       <button class="jbtn" @mousedown="jog0('turntable',tableStep)" @mouseup="stopJ()" @mouseleave="stopJ()" @touchstart.prevent="jog0('turntable',tableStep)" @touchend="stopJ()">
         ↻ <span class="mono" x-text="'+'+tableStep+'°'"></span>
       </button>
+    </div>
+  </div>
+
+  <!-- RINGLIGHT -->
+  <div class="wgt">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Ringlight</span>
+      <div class="flex aic g2">
+        <div class="dot" :class="rlOn?'live':'off'" style="width:7px;height:7px"></div>
+        <span class="xs mono muted" x-text="rlOn?'ON':'OFF'"></span>
+      </div>
+    </div>
+    <div class="flex g2" style="margin-bottom:12px">
+      <button class="btn" :class="rlOn?'btn-p':'btn-g'" style="flex:1;font-size:11px" @click="rlTurnOn()">ON</button>
+      <button class="btn" :class="!rlOn?'btn-d':'btn-g'" style="flex:1;font-size:11px" @click="rlTurnOff()">OFF</button>
+    </div>
+    <div class="fg">
+      <label class="lbl">Brightness</label>
+      <div class="rrow">
+        <input type="range" min="0" max="100" step="5" x-model.number="rlBright" @change="rlSetBright(rlBright)">
+        <span class="rval" x-text="rlBright+'%'"></span>
+      </div>
     </div>
   </div>
 
@@ -460,7 +489,10 @@ function app(){return{
   // camera
   prevSrc:null, prevLoading:false, prevAge:0, prevLast:null,
   xhair:true, camOk:false, capturing:false,
-  camFocus:0, camShutterMs:50, camAF:true,
+  camFocus:0, camShutterMs:50, camAF:true, previewRot:-90,
+
+  // ringlight
+  rlOn:false, rlBright:100,
 
   // motors
   rotorAng:0, rotorStep:5, rotorMin:-20, rotorMax:60,
@@ -484,7 +516,7 @@ function app(){return{
 
   /* ─ init ─ */
   async init(){
-    await Promise.all([this.fetchMotors(),this.fetchCam(),this.loadLib(),this.fetchScan()]);
+    await Promise.all([this.fetchMotors(),this.fetchCam(),this.loadLib(),this.fetchScan(),this.fetchRL()]);
     this.startPrev();this.connectWS();
     setInterval(()=>{if(this.prevLast)this.prevAge=Math.round((Date.now()-this.prevLast)/1000)},1000);
   },
@@ -517,6 +549,12 @@ function app(){return{
   async setFocus(v){try{await fetch(`${this.api}/hardware/camera/focus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lens_position:parseFloat(v)})})}catch(e){}},
   async setExposure(us){try{await fetch(`${this.api}/hardware/camera/exposure`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shutter_us:Math.round(us)})})}catch(e){}},
   async toggleAF(){this.camAF=!this.camAF;try{await fetch(`${this.api}/hardware/camera/autofocus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:this.camAF})})}catch(e){}},
+
+  /* ─ ringlight ─ */
+  async fetchRL(){try{const r=await fetch(`${this.api}/hardware/lights/`);if(r.ok){const d=await r.json();this.rlOn=d.is_on??false;this.rlBright=d.brightness??100;}}catch(e){}},
+  async rlTurnOn(){try{await fetch(`${this.api}/hardware/lights/on?brightness=${this.rlBright}`,{method:'POST'});this.rlOn=true;this.toast('Ringlight on','info');}catch(e){}},
+  async rlTurnOff(){try{await fetch(`${this.api}/hardware/lights/off`,{method:'POST'});this.rlOn=false;this.toast('Ringlight off','info');}catch(e){}},
+  async rlSetBright(v){try{const r=await fetch(`${this.api}/hardware/lights/brightness`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brightness:v})});if(r.ok&&this.rlOn)this.toast('Brightness '+v+'%','info');}catch(e){}},
 
   /* ─ motors ─ */
   async fetchMotors(){
