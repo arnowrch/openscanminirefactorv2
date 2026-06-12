@@ -239,21 +239,28 @@ class CameraController:
         ]
 
         if s.autofocus:
-            # --autofocus-on-capture triggers a dedicated PDAF sweep right before
-            # the shutter fires (OS2: cam_AFmode=True, cam_timeout=800ms).
-            # Without this flag, rpicam-still only runs passive AF during --timeout
-            # and may capture before focus has converged.
+            # OS3 approach: persistent picamera2 + autofocus_cycle().
+            # With rpicam-still we approximate this:
+            # - Remove --immediate so the preview/settle phase runs (AF needs it)
+            # - --autofocus-on-capture triggers a dedicated PDAF scan before shutter
+            # - 4s timeout gives the IMX519 PDAF sensor time to converge
+            # - AF window: central 20% of frame (matches OS3 default of 10% of full res)
+            cmd = [c for c in cmd if c != "--immediate"]  # remove --immediate
+            for i, arg in enumerate(cmd):
+                if arg == "--timeout":
+                    cmd[i + 1] = "4000"
+                    break
+            w_af = max(1, s.width // 5)
+            h_af = max(1, s.height // 5)
+            x_af = (s.width - w_af) // 2
+            y_af = (s.height - h_af) // 2
             cmd += [
                 "--autofocus-mode", "auto",
                 "--autofocus-on-capture",
                 "--autofocus-speed", "fast",
                 "--autofocus-range", "normal",
+                "--autofocus-window", f"{x_af},{y_af},{w_af},{h_af}",
             ]
-            # Extend timeout to 3s so AF sweep completes before capture
-            for i, arg in enumerate(cmd):
-                if arg == "--timeout":
-                    cmd[i + 1] = "3000"
-                    break
         else:
             cmd += [
                 "--autofocus-mode", "manual",
