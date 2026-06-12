@@ -127,12 +127,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app_logger.warning(f"Camera init failed (non-fatal): {e}")
 
-    # Scan engine — wires motor + camera together
+    # Scan engine — wires motor + camera + ringlight together
     try:
+        from openscan_mini.routers.v1.lights import RINGLIGHT
         if MOTOR_CONTROLLER and camera:
-            scan_engine = ScanEngine(MOTOR_CONTROLLER, camera)
+            scan_engine = ScanEngine(MOTOR_CONTROLLER, camera, ringlight=RINGLIGHT)
             set_scan_engine(scan_engine)
-            app_logger.info("✓ Scan engine initialized")
+            app_logger.info("✓ Scan engine initialized (ringlight: %s)", "yes" if RINGLIGHT else "no")
         else:
             app_logger.warning("Scan engine skipped — motors or camera not ready")
     except Exception as e:

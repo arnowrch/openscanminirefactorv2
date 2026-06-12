@@ -85,17 +85,18 @@ class ScanProgress:
 
 class ScanEngine:
     """
-    Orchestrates rotor + turntable motors and camera for a full scan.
+    Orchestrates rotor + turntable motors, ringlight, and camera for a full scan.
 
     Usage:
-        engine = ScanEngine(motor_controller, camera_controller)
+        engine = ScanEngine(motor_controller, camera_controller, ringlight)
         await engine.start(config)
         # monitor via engine.progress or WebSocket broadcasts
     """
 
-    def __init__(self, motor_controller, camera_controller):
+    def __init__(self, motor_controller, camera_controller, ringlight=None):
         self._motors = motor_controller
         self._camera = camera_controller
+        self._ringlight = ringlight
         self._state = ScanState.IDLE
         self._task: Optional[asyncio.Task] = None
         self._config: Optional[ScanConfig] = None
@@ -160,6 +161,11 @@ class ScanEngine:
             output_path = Path(config.output_dir) / config.scan_id
             output_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"Scan '{config.scan_id}' started — {config.total_photos} photos → {output_path}")
+
+            # Ringlight on for the entire scan
+            if self._ringlight:
+                self._ringlight.turn_on()
+                logger.info("Ringlight ON for scan")
             for r_idx, rotor_angle in enumerate(config.rotor_angles):
                 if self._cancel_requested:
                     break
@@ -212,6 +218,10 @@ class ScanEngine:
             self._progress.error = str(e)
             logger.error(f"Scan failed: {e}", exc_info=True)
         finally:
+            # Ringlight off after scan (done, cancelled, or failed)
+            if self._ringlight:
+                self._ringlight.turn_off()
+                logger.info("Ringlight OFF after scan")
             self._progress.state = self._state
             self._progress.elapsed_s = time.monotonic() - start_time
             self._progress.eta_s = None
