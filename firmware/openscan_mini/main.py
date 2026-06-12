@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from openscan_mini.config import HardwareConfig, setup_logging
 from openscan_mini.controllers.hardware.motors import DualMotorController
-from openscan_mini.routers.v1 import motors_router
+from openscan_mini.routers.v1.motors import router as motors_router, set_motor_controller
 
 
 # Configure logging
@@ -88,8 +88,7 @@ async def lifespan(app: FastAPI):
     # Initialize motor controller
     try:
         MOTOR_CONTROLLER = DualMotorController(HARDWARE_CONFIG)
-        # Register motor controller with router
-        motors_router.set_motor_controller(MOTOR_CONTROLLER)
+        set_motor_controller(MOTOR_CONTROLLER)
         app_logger.info("✓ Motor controller initialized")
     except Exception as e:
         app_logger.error(f"Failed to initialize motor controller: {e}")
