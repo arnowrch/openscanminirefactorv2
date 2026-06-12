@@ -73,3 +73,7 @@ npm-debug.log*
 /temp/
 *.zip
 *.tar.gz
+
+# Large firmware images
+*.img
+original_firmeware/
