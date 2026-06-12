@@ -17,7 +17,9 @@ from fastapi.responses import JSONResponse
 
 from openscan_mini.config import HardwareConfig, setup_logging
 from openscan_mini.controllers.hardware.motors import DualMotorController
+from openscan_mini.controllers.hardware.lights import RinglightController
 from openscan_mini.routers.v1.motors import router as motors_router, set_motor_controller
+from openscan_mini.routers.v1.lights import router as lights_router, set_ringlight_controller
 
 
 # Configure logging
@@ -94,6 +96,17 @@ async def lifespan(app: FastAPI):
         app_logger.error(f"Failed to initialize motor controller: {e}")
         sys.exit(1)
 
+    # Initialize ringlight (channel 1 = GPIO17 confirmed, channel 2 = GPIO27 pending test)
+    try:
+        ringlight_pins = [
+            ch.gpio_pin for ch in HARDWARE_CONFIG.ringlight.channels
+        ]
+        ringlight = RinglightController(pins=ringlight_pins)
+        set_ringlight_controller(ringlight)
+        app_logger.info(f"✓ Ringlight controller initialized — pins={ringlight_pins}")
+    except Exception as e:
+        app_logger.warning(f"Ringlight init failed (non-fatal): {e}")
+
     app_logger.info("✓ FastAPI application ready")
     app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
     app_logger.info(f"✓ API docs available at http://0.0.0.0:8000/docs")
@@ -107,6 +120,10 @@ async def lifespan(app: FastAPI):
     if MOTOR_CONTROLLER:
         MOTOR_CONTROLLER.cleanup()
         app_logger.info("✓ Motor controller cleaned up")
+
+    from openscan_mini.routers.v1.lights import RINGLIGHT
+    if RINGLIGHT:
+        RINGLIGHT.cleanup()
 
     app_logger.info("✓ Cleanup complete")
 
@@ -130,6 +147,7 @@ app.add_middleware(
 
 # Register routers
 app.include_router(motors_router)
+app.include_router(lights_router)
 
 
 # ============================================================================
