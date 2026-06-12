@@ -1,14 +1,13 @@
 """
 Ringlight controller for OpenScan Mini.
 
-Hardware (Greenshield verified from OS2 firmware):
-  GPIO17 = ringlight1 (serienmäßig, confirmed)
-  GPIO27 = ringlight2 AND rotor_endstop (conflict — use as endstop only)
-  GPIO13 = external ringlight (hardware PWM pin, free, needs MOSFET circuit)
+Hardware (Greenshield, confirmed from OS2 firmware audit):
+  GPIO17 = ringlight1  (pin_ringlight1)
+  GPIO27 = ringlight2  (pin_ringlight2) — both drive the onboard LED ring
 
-PWM strategy:
+Stock OS2/OS3 use digital on/off only. PWM dimming is our enhancement:
   - Try gpiozero PWMOutputDevice first (soft-PWM via lgpio)
-  - Fall back to DigitalOutputDevice if PWM init fails
+  - Fall back to DigitalOutputDevice if lgpio not installed
 """
 
 import logging
