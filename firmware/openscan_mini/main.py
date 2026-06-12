@@ -107,20 +107,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app_logger.warning(f"Ringlight init failed (non-fatal): {e}")
 
-    # Camera: UC-873 Rev.D USB camera via linuxpy (V4L2)
+    # Camera: Arducam IMX519 (CSI ribbon cable) via rpicam-still
     try:
         cam_cfg = HARDWARE_CONFIG.camera.capture_settings
         cam_settings = CameraSettings(
-            focus=HARDWARE_CONFIG.camera.autofocus.get("default_focus", 2838),
             shutter_us=cam_cfg.get("shutter_speed_us", 50000),
+            gain=float(cam_cfg.get("gain", 1.0)),
             jpeg_quality=cam_cfg.get("jpeg_quality", 95),
-            saturation=cam_cfg.get("saturation"),
-            contrast=cam_cfg.get("contrast"),
-            gain=cam_cfg.get("gain"),
+            saturation=float(cam_cfg.get("saturation", 1.0)),
+            contrast=float(cam_cfg.get("contrast", 1.0)),
+            autofocus=cam_cfg.get("autofocus_enabled", True),
         )
-        camera = CameraController(device_path="/dev/video0", settings=cam_settings)
+        camera = CameraController(settings=cam_settings)
         set_camera_controller(camera)
-        app_logger.info("✓ Camera initialized — /dev/video0 (UC-873 Rev.D via linuxpy)")
+        app_logger.info("✓ Camera initialized — IMX519 CSI via rpicam-still")
     except Exception as e:
         app_logger.warning(f"Camera init failed (non-fatal): {e}")
 

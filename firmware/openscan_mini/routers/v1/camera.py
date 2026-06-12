@@ -1,4 +1,4 @@
-"""REST API endpoints for UC-873 Rev.D USB camera control."""
+"""REST API endpoints for Arducam IMX519 camera control."""
 
 import logging
 
@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/hardware/camera", tags=["camera"])
 
-CAMERA: "CameraController | None" = None  # type: ignore[name-defined]
+CAMERA = None
 
 
 def set_camera_controller(controller) -> None:
@@ -24,11 +24,18 @@ def _get():
 
 
 class FocusRequest(BaseModel):
-    value: int = Field(..., ge=0, le=1023, description="Focus absolute 0–1023")
+    lens_position: float = Field(
+        ..., ge=0.0, le=32.0,
+        description="Lens position in diopters: 0.0=infinity, ~2.0=50cm, ~10.0=10cm"
+    )
 
 
 class ExposureRequest(BaseModel):
-    shutter_us: int = Field(..., ge=100, le=1_000_000, description="Exposure in microseconds")
+    shutter_us: int = Field(..., ge=100, le=1_000_000, description="Shutter speed in microseconds")
+
+
+class AutofocusRequest(BaseModel):
+    enabled: bool = Field(..., description="Enable or disable continuous autofocus")
 
 
 @router.get("/")
@@ -39,7 +46,7 @@ async def get_camera_status() -> dict:
 
 @router.post("/capture")
 async def capture_jpeg():
-    """Capture a single JPEG frame and return it as image/jpeg."""
+    """Capture a single JPEG from the IMX519 and return as image/jpeg."""
     cam = _get()
     if cam._busy:
         raise HTTPException(status_code=503, detail="Camera busy")
@@ -52,13 +59,23 @@ async def capture_jpeg():
 
 @router.post("/focus")
 async def set_focus(request: FocusRequest) -> dict:
-    """Set manual focus. Range 0–1023 (UC-873 default: 2838 clipped to 1023)."""
-    _get().set_focus(request.value)
-    return {"focus": request.value, "status": "ok"}
+    """
+    Set manual focus (disables autofocus).
+    lens_position: 0.0=infinity, 2.0=50cm, 10.0=10cm (diopters = 1/distance_m).
+    """
+    _get().set_focus(request.lens_position)
+    return {"lens_position": request.lens_position, "autofocus": False, "status": "ok"}
+
+
+@router.post("/autofocus")
+async def set_autofocus(request: AutofocusRequest) -> dict:
+    """Enable or disable continuous autofocus."""
+    _get().set_autofocus(request.enabled)
+    return {"autofocus": request.enabled, "status": "ok"}
 
 
 @router.post("/exposure")
 async def set_exposure(request: ExposureRequest) -> dict:
-    """Set exposure (shutter speed) in microseconds."""
+    """Set exposure time in microseconds (e.g. 50000 = 50ms)."""
     _get().set_exposure(request.shutter_us)
     return {"shutter_us": request.shutter_us, "status": "ok"}

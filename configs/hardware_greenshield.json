@@ -99,41 +99,28 @@
   },
 
   "camera": {
-    "type": "UC-873 Rev.D",
-    "interface": "USB",
-    "notes": "NOT Arducam IMX519. UC-873 Rev.D detected by VS Code agent. Check v4l2-ctl for exact capabilities.",
-    "resolution": "TBD",
-    "sensor_size_mm": [0, 0],
-    "pixel_size_um": 0,
-    "lens": "Unknown",
+    "type": "imx519",
+    "interface": "CSI (ribbon cable)",
+    "notes": "Arducam IMX519 16MP. Confirmed via rpicam-hello after dtoverlay=imx519,media-controller=1 in /boot/firmware/config.txt. OS2 firmware also used imx519 overlay.",
+    "resolution": "4656x3496",
+    "sensor_size_mm": [7.857, 5.904],
+    "pixel_size_um": 1.22,
+    "lens": "M12 (adjustable)",
     "autofocus": {
       "enabled": true,
-      "method": "v4l2-ctl",
-      "focus_range": [0, 1023],
+      "method": "rpicam-still --autofocus-mode auto",
       "default_focus": 2838,
-      "note": "Focus default from original firmware settings: cam_focus=2838"
+      "note": "OS2 cam_focus=2838 was legacy V4L2 value. rpicam-still uses --lens-position (diopters, 0.0=infinity)."
     },
     "capture_settings": {
       "shutter_speed_us": 50000,
       "saturation": 1,
       "contrast": 1,
-      "awbg_red": 0,
-      "awbg_blue": 0,
       "gain": 1,
       "jpeg_quality": 95,
-      "timeout_ms": 800,
-      "cam_rotation": 0,
-      "autofocus_enabled": true
-    },
-    "known_cameras": {
-      "imx519": [4656, 3496],
-      "imx219": [3280, 2464],
-      "imx477": [4056, 3040],
-      "ov5647": [2592, 1944],
-      "imx378": [3840, 2880],
-      "ov9271": [1280, 800],
-      "imx290a": [1920, 1080],
-      "imx290b": [1920, 1080]
+      "autofocus_enabled": true,
+      "width": 4656,
+      "height": 3496
     }
   },
 
