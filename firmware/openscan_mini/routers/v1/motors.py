@@ -94,3 +94,34 @@ async def reset_motors() -> dict:
         return {"status": "ok", "message": "All motors reset to 0°"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{motor_id}/home")
+async def home_motor(motor_id: str) -> dict:
+    """
+    Drive motor slowly toward endstop, then reset position.
+    motor_id: 'rotor' or 'turntable'
+    """
+    motor = _get_motor(motor_id)
+    try:
+        status = await motor.home()
+        return {
+            "status": "homed",
+            "motor": motor_id,
+            "angle": status.current_angle,
+            "endstop_hit": status.endstop_hit,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{motor_id}/endstop")
+async def get_endstop(motor_id: str) -> dict:
+    """Read current endstop state."""
+    motor = _get_motor(motor_id)
+    return {
+        "motor": motor_id,
+        "endstop_configured": motor._endstop is not None,
+        "endstop_pin": motor._endstop.pin if motor._endstop else None,
+        "is_triggered": motor.is_at_endstop(),
+    }
