@@ -85,6 +85,23 @@ async def jog_motor(motor_id: str, delta: float = 0.0) -> MotorStatus:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/stop-all")
+async def stop_all_motors() -> dict:
+    """Emergency stop — halt all motors immediately."""
+    ctrl = _get_controller()
+    ctrl.rotor.stop()
+    ctrl.turntable.stop()
+    return {"status": "stopped", "message": "All motors halted"}
+
+
+@router.post("/{motor_id}/zero")
+async def zero_motor(motor_id: str) -> dict:
+    """Set current position as 0° without moving (software zero)."""
+    motor = _get_motor(motor_id)
+    motor.current_angle = 0.0
+    return {"status": "ok", "motor": motor_id, "angle": 0.0}
+
+
 @router.post("/reset")
 async def reset_motors() -> dict:
     """Move both motors to 0°."""

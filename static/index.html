@@ -154,6 +154,12 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .btn-g:hover{background:var(--card);color:var(--text);border-color:var(--border-lit)}
 .btn-d{background:transparent;color:var(--red);border:1px solid rgba(248,113,113,.28)}
 .btn-d:hover{background:rgba(248,113,113,.1);border-color:var(--red)}
+.estop{background:linear-gradient(135deg,#b91c1c,#dc2626);color:#fff;border:none;padding:5px 14px;border-radius:var(--rs);font-size:10px;font-weight:800;letter-spacing:.09em;cursor:pointer;transition:all var(--tr);box-shadow:0 2px 12px rgba(220,38,38,.4);font-family:var(--sans)}
+.estop:hover{background:linear-gradient(135deg,#dc2626,#ef4444);box-shadow:0 4px 20px rgba(220,38,38,.6);transform:translateY(-1px)}
+.estop:active{transform:translateY(0);box-shadow:0 2px 8px rgba(220,38,38,.3)}
+.es-pill{font-size:8px;font-weight:700;letter-spacing:.08em;font-family:var(--mono);padding:2px 6px;border-radius:4px;border:1px solid transparent;vertical-align:middle}
+.es-pill.trig{color:var(--orange);border-color:rgba(196,131,74,.4);background:rgba(196,131,74,.12);animation:pulse 1.5s infinite}
+.es-pill.free{color:var(--muted);border-color:var(--border);background:transparent}
 .fg{display:flex;flex-direction:column;gap:5px}
 .lbl{font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
 .inp{width:100%;padding:7px 9px;background:var(--card);border:1px solid var(--border);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:12px;transition:all var(--tr)}
@@ -201,6 +207,7 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
   <div class="chip scan" x-show="scanState==='running'" x-transition>
     <div class="dot live"></div> SCANNING
   </div>
+  <button class="estop" @click="eStop()" title="Emergency stop — abort scan &amp; halt motors">⏹ E-STOP</button>
   <span class="xs muted mono">v0.2.0</span>
 </header>
 
@@ -304,8 +311,14 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
   <!-- ROTOR -->
   <div class="wgt">
     <div class="wgt-hdr">
-      <span class="wgt-title">Camera Arm · Rotor</span>
-      <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('rotor')">HOME</button>
+      <div class="flex aic g2">
+        <span class="wgt-title">Camera Arm · Rotor</span>
+        <span class="es-pill" :class="rotorEndstop?'trig':'free'" x-text="rotorEndstop?'● TRIG':'free'"></span>
+      </div>
+      <div class="flex g2">
+        <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="zeroMotor('rotor')" title="Set current position as 0°">ZERO</button>
+        <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('rotor')">HOME</button>
+      </div>
     </div>
     <div class="ang-lbl">POSITION</div>
     <div class="ang"><span x-text="rotorAng.toFixed(1)"></span><span class="u">°</span></div>
@@ -328,8 +341,14 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
   <!-- TURNTABLE -->
   <div class="wgt">
     <div class="wgt-hdr">
-      <span class="wgt-title">Object Platform · Turntable</span>
-      <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('turntable')">HOME</button>
+      <div class="flex aic g2">
+        <span class="wgt-title">Object Platform · Turntable</span>
+        <span class="es-pill" :class="tableEndstop?'trig':'free'" x-text="tableEndstop?'● TRIG':'free'"></span>
+      </div>
+      <div class="flex g2">
+        <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="zeroMotor('turntable')" title="Set current position as 0°">ZERO</button>
+        <button class="btn btn-g" style="padding:3px 8px;font-size:9px" @click="home('turntable')">HOME</button>
+      </div>
     </div>
     <div class="ang-lbl">POSITION</div>
     <div class="ang"><span x-text="tableAng.toFixed(1)"></span><span class="u">°</span></div>
@@ -524,6 +543,7 @@ function app(){return{
   // motors
   rotorAng:0, rotorStep:5, rotorMin:-20, rotorMax:60,
   tableAng:0, tableStep:15,
+  rotorEndstop:false, tableEndstop:false,
   _jogTimer:null,
 
   // scan
@@ -550,6 +570,9 @@ function app(){return{
     // Analysis polled every 3s — stream itself runs natively in the <img> tag
     setInterval(()=>this.fetchAnalysis(),3000);
     this.fetchAnalysis();
+    // Endstop state polled every 1.2s
+    setInterval(()=>this.fetchEndstops(),1200);
+    this.fetchEndstops();
   },
 
   /* ─ camera ─ */
@@ -601,9 +624,23 @@ function app(){return{
       if(r.ok){const j=await r.json();if(m==='rotor')this.rotorAng=j.current_angle??this.rotorAng;else this.tableAng=j.current_angle??this.tableAng;}}catch(e){}
   },
   async home(m){
-    try{await fetch(`${this.api}/hardware/motors/${m}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({angle:0})});
-      if(m==='rotor')this.rotorAng=0;else this.tableAng=0;this.toast(m+' → 0°','info');}catch(e){}
+    try{await fetch(`${this.api}/hardware/motors/${m}/home`,{method:'POST'});
+      const r=await fetch(`${this.api}/hardware/motors/${m}`);if(r.ok){const d=await r.json();if(m==='rotor')this.rotorAng=d.current_angle??0;else this.tableAng=d.current_angle??0;}
+      this.toast(m+' homed','info');}catch(e){this.toast('Home error: '+e.message,'error');}
   },
+  async fetchEndstops(){
+    try{const[r,t]=await Promise.all([fetch(`${this.api}/hardware/motors/rotor/endstop`),fetch(`${this.api}/hardware/motors/turntable/endstop`)]);
+      if(r.ok){const d=await r.json();this.rotorEndstop=d.is_triggered;}
+      if(t.ok){const d=await t.json();this.tableEndstop=d.is_triggered;}
+    }catch(e){}},
+  async zeroMotor(m){
+    try{await fetch(`${this.api}/hardware/motors/${m}/zero`,{method:'POST'});
+      if(m==='rotor')this.rotorAng=0;else this.tableAng=0;this.toast(m+' zeroed here','info');}
+    catch(e){this.toast('Zero error: '+e.message,'error');}},
+  async eStop(){
+    try{await Promise.all([fetch(`${this.api}/scan/stop`,{method:'POST'}),fetch(`${this.api}/hardware/motors/stop-all`,{method:'POST'})]);
+      this.scanState='cancelled';this.toast('E-STOP — motors halted','error');}
+    catch(e){this.toast('E-Stop error: '+e.message,'error');}},
 
   /* ─ scan ─ */
   addAng(){const v=parseFloat(this.newAng);if(!isNaN(v)&&!this.cfg.angles.includes(v)){this.cfg.angles.push(v);this.cfg.angles.sort((a,b)=>a-b);}this.newAng=''},
