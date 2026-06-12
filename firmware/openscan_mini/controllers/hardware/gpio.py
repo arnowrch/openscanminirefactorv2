@@ -18,7 +18,23 @@ _buttons: Dict[int, object] = {}
 _SIMULATION = False  # set to True when gpiozero is unavailable
 
 try:
-    from gpiozero import Button, DigitalOutputDevice, PWMOutputDevice
+    from gpiozero import Button, Device, DigitalOutputDevice, PWMOutputDevice
+
+    # On Pi OS Bookworm, gpiozero may default to NativeFactory which has no
+    # software-PWM support. Explicitly prefer lgpio (ships with Bookworm) so
+    # PWMOutputDevice works on any GPIO pin (incl. GPIO17 which has no hw-PWM).
+    try:
+        from gpiozero.pins.lgpio import LGPIOFactory
+        Device.pin_factory = LGPIOFactory()
+        logger.info("GPIO: using lgpio pin factory (software-PWM on all pins)")
+    except Exception as _lgpio_err:
+        try:
+            from gpiozero.pins.rpigpio import RPiGPIOFactory
+            Device.pin_factory = RPiGPIOFactory()
+            logger.info("GPIO: lgpio unavailable, using RPi.GPIO factory")
+        except Exception:
+            logger.warning(f"GPIO: could not set preferred factory ({_lgpio_err}), using default")
+
 except ImportError:
     logger.warning("gpiozero not available — running in simulation mode")
     _SIMULATION = True

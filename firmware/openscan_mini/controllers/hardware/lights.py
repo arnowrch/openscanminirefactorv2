@@ -18,7 +18,7 @@ from openscan_mini.controllers.hardware import gpio
 
 logger = logging.getLogger(__name__)
 
-PWM_FREQUENCY = 1000  # Hz
+PWM_FREQUENCY = 100  # Hz — 100 Hz is stable for software-PWM (1000 Hz can miss edges)
 
 
 class ChannelState:
