@@ -28,21 +28,20 @@ class BrightnessRequest(BaseModel):
 
 
 class ChannelRequest(BaseModel):
-    pin: int = Field(..., description="GPIO pin number of the channel")
+    pin: int = Field(..., description="GPIO pin number")
     brightness: float = Field(..., ge=0, le=100, description="Brightness 0–100 %")
 
 
-@router.get("")
+@router.get("/")
 async def get_ringlight_status() -> dict:
-    """Get ringlight status and channel info."""
+    """Get ringlight status and per-channel info."""
     return _get().get_status()
 
 
 @router.post("/on")
 async def ringlight_on(brightness: float = 100.0) -> dict:
-    """Turn on all channels at given brightness (0–100 %)."""
-    brightness = max(0.0, min(100.0, brightness))
-    return _get().turn_on(brightness)
+    """Turn on all channels. brightness=0–100 (query param)."""
+    return _get().turn_on(max(0.0, min(100.0, brightness)))
 
 
 @router.post("/off")
@@ -60,9 +59,9 @@ async def set_brightness(request: BrightnessRequest) -> dict:
 @router.post("/channel")
 async def set_channel(request: ChannelRequest) -> dict:
     """
-    Set brightness on a single GPIO pin.
-    Use this to test GPIO27 independently:
-      {"pin": 27, "brightness": 50}
+    Control a single GPIO pin independently.
+    Useful for testing GPIO17 vs GPIO27 separately.
+    Example: {"pin": 17, "brightness": 50}
     """
     try:
         return _get().set_channel(request.pin, request.brightness)

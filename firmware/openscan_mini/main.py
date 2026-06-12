@@ -96,14 +96,12 @@ async def lifespan(app: FastAPI):
         app_logger.error(f"Failed to initialize motor controller: {e}")
         sys.exit(1)
 
-    # Initialize ringlight (channel 1 = GPIO17 confirmed, channel 2 = GPIO27 pending test)
+    # Ringlight: GPIO17 confirmed. GPIO27 is shared with rotor_endstop — use endstop only.
+    # External ringlight (GPIO13, MOSFET) added when wired.
     try:
-        ringlight_pins = [
-            ch.gpio_pin for ch in HARDWARE_CONFIG.ringlight.channels
-        ]
-        ringlight = RinglightController(pins=ringlight_pins)
+        ringlight = RinglightController(pins=[17], name="ringlight")
         set_ringlight_controller(ringlight)
-        app_logger.info(f"✓ Ringlight controller initialized — pins={ringlight_pins}")
+        app_logger.info("✓ Ringlight initialized — GPIO17 (PWM or digital fallback)")
     except Exception as e:
         app_logger.warning(f"Ringlight init failed (non-fatal): {e}")
 

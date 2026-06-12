@@ -1,16 +1,17 @@
 """
 Ringlight controller for OpenScan Mini.
 
-Controls onboard ringlight channels via PWM (gpiozero PWMOutputDevice).
-Adapted from OpenScan3 (github.com/OpenScan-org/OpenScan3).
+Hardware (Greenshield verified from OS2 firmware):
+  GPIO17 = ringlight1 (serienmäßig, confirmed)
+  GPIO27 = ringlight2 AND rotor_endstop (conflict — use as endstop only)
+  GPIO13 = external ringlight (hardware PWM pin, free, needs MOSFET circuit)
 
-Hardware (Greenshield):
-  Channel 1: GPIO17  — confirmed ringlight
-  Channel 2: GPIO27  — ringlight OR endstop (needs physical test)
+PWM strategy:
+  - Try gpiozero PWMOutputDevice first (soft-PWM via lgpio)
+  - Fall back to DigitalOutputDevice if PWM init fails
 """
 
 import logging
-from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from openscan_mini.controllers.hardware import gpio
@@ -20,76 +21,94 @@ logger = logging.getLogger(__name__)
 PWM_FREQUENCY = 1000  # Hz
 
 
-@dataclass
 class ChannelState:
-    pin: int
-    is_on: bool = False
-    brightness: float = 100.0  # 0-100 %
+    def __init__(self, pin: int):
+        self.pin = pin
+        self.is_on = False
+        self.brightness = 100.0  # 0–100 %
+        self.pwm_available = False  # set True if PWMOutputDevice succeeded
 
 
 class RinglightController:
     """
-    Controls one or more ringlight channels via PWM.
+    Controls ringlight channels via PWM with digital fallback.
 
-    Brightness is 0–100 %. All channels are driven in sync by default,
-    but individual channels can be addressed for testing.
+    Brightness 0–100 %. If PWM init fails on a pin, falls back to
+    DigitalOutputDevice (on/off only) so hardware can be verified first.
     """
 
     def __init__(self, pins: List[int], name: str = "ringlight"):
         self.name = name
-        self.channels: Dict[int, ChannelState] = {
-            pin: ChannelState(pin=pin) for pin in pins
-        }
+        self.channels: Dict[int, ChannelState] = {}
 
-        gpio.initialize_pwm_pins(pins, freq=PWM_FREQUENCY)
-        # Start with all channels off
         for pin in pins:
-            gpio.set_pwm_pin(pin, 0.0)
+            ch = ChannelState(pin)
+            # Try PWM first
+            try:
+                gpio.initialize_pwm_pins([pin], freq=PWM_FREQUENCY)
+                # Verify pin was actually registered
+                initialized = gpio.get_initialized_pins()
+                if pin in initialized.get("pwm", []):
+                    ch.pwm_available = True
+                    gpio.set_pwm_pin(pin, 0.0)
+                    logger.info(f"GPIO{pin} initialized as PWM output.")
+                else:
+                    raise RuntimeError(f"PWM init silently failed for GPIO{pin}")
+            except Exception as e:
+                logger.warning(f"GPIO{pin} PWM failed ({e}), falling back to digital output.")
+                gpio.initialize_output_pins([pin])
+                gpio.set_output_pin(pin, False)
 
-        logger.info(f"RinglightController '{name}' ready — pins={pins}")
+            self.channels[pin] = ch
+
+        logger.info(
+            f"RinglightController '{name}' ready — "
+            f"pins={pins}, "
+            f"pwm={[p for p, ch in self.channels.items() if ch.pwm_available]}, "
+            f"digital={[p for p, ch in self.channels.items() if not ch.pwm_available]}"
+        )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def turn_on(self, brightness: Optional[float] = None) -> dict:
-        """Turn on all channels. Optionally set brightness (0–100)."""
+        """Turn on all channels."""
         for ch in self.channels.values():
-            ch.is_on = True
             if brightness is not None:
                 ch.brightness = max(0.0, min(100.0, brightness))
-            gpio.set_pwm_pin(ch.pin, ch.brightness / 100.0)
-        logger.info(f"Ringlight '{self.name}' ON — brightness={self._current_brightness():.0f}%")
+            ch.is_on = True
+            self._apply(ch)
+        logger.info(f"Ringlight '{self.name}' ON — brightness={brightness or ch.brightness:.0f}%")
         return self.get_status()
 
     def turn_off(self) -> dict:
         """Turn off all channels."""
         for ch in self.channels.values():
             ch.is_on = False
-            gpio.set_pwm_pin(ch.pin, 0.0)
+            self._apply(ch)
         logger.info(f"Ringlight '{self.name}' OFF")
         return self.get_status()
 
     def set_brightness(self, brightness: float) -> dict:
-        """Set brightness (0–100 %) on all channels. Turns on if off."""
+        """Set brightness (0–100 %) on all channels."""
         brightness = max(0.0, min(100.0, brightness))
         for ch in self.channels.values():
             ch.brightness = brightness
             ch.is_on = brightness > 0
-            gpio.set_pwm_pin(ch.pin, brightness / 100.0)
-        logger.info(f"Ringlight '{self.name}' brightness={brightness:.0f}%")
+            self._apply(ch)
         return self.get_status()
 
     def set_channel(self, pin: int, brightness: float) -> dict:
-        """Set a single channel by pin number (for testing GPIO27)."""
+        """Set a single channel by GPIO pin number."""
         if pin not in self.channels:
-            raise ValueError(f"Pin {pin} not in ringlight channels {list(self.channels)}")
+            raise ValueError(f"Pin {pin} not configured. Available: {list(self.channels)}")
         brightness = max(0.0, min(100.0, brightness))
         ch = self.channels[pin]
         ch.brightness = brightness
         ch.is_on = brightness > 0
-        gpio.set_pwm_pin(pin, brightness / 100.0)
-        logger.info(f"Ringlight '{self.name}' channel GPIO{pin}={brightness:.0f}%")
+        self._apply(ch)
+        logger.info(f"Ringlight channel GPIO{pin}={brightness:.0f}%")
         return self.get_status()
 
     def get_status(self) -> dict:
@@ -101,6 +120,7 @@ class RinglightController:
                     "pin": ch.pin,
                     "is_on": ch.is_on,
                     "brightness": ch.brightness,
+                    "mode": "pwm" if ch.pwm_available else "digital",
                 }
                 for ch in self.channels.values()
             ],
@@ -109,6 +129,14 @@ class RinglightController:
     def cleanup(self) -> None:
         self.turn_off()
 
-    def _current_brightness(self) -> float:
-        on_channels = [ch for ch in self.channels.values() if ch.is_on]
-        return on_channels[0].brightness if on_channels else 0.0
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _apply(self, ch: ChannelState) -> None:
+        """Write channel state to GPIO."""
+        if ch.pwm_available:
+            value = (ch.brightness / 100.0) if ch.is_on else 0.0
+            gpio.set_pwm_pin(ch.pin, value)
+        else:
+            gpio.set_output_pin(ch.pin, ch.is_on)
