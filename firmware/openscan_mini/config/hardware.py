@@ -151,7 +151,7 @@ class HardwareConfig(BaseModel):
         logger.info(f"Loading hardware config from {filepath}")
 
         try:
-            with open(filepath, "r") as f:
+            with open(filepath, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in hardware config: {e}")
