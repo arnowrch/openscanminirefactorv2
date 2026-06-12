@@ -63,16 +63,18 @@ class EndstopConfig(BaseModel):
 
 
 class CameraConfig(BaseModel):
-    """Camera configuration (Arducam IMX519)."""
+    """Camera configuration — flexible to support UC-873 Rev.D and others."""
+
+    model_config = ConfigDict(extra="ignore")
 
     type: str
     interface: str
-    resolution: str
-    sensor_size_mm: list[float]
-    pixel_size_um: float
-    lens: str
-    autofocus: Dict[str, Any]
-    capture_settings: Dict[str, Any]
+    resolution: Optional[str] = None
+    sensor_size_mm: Optional[list] = None
+    pixel_size_um: Optional[float] = None
+    lens: Optional[str] = None
+    autofocus: Dict[str, Any] = Field(default_factory=dict)
+    capture_settings: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RinglightChannelConfig(BaseModel):

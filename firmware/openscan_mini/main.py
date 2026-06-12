@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse
 from openscan_mini.config import HardwareConfig, setup_logging
 from openscan_mini.controllers.hardware.motors import DualMotorController
 from openscan_mini.controllers.hardware.lights import RinglightController
+from openscan_mini.controllers.hardware.camera import CameraController, CameraSettings
 from openscan_mini.routers.v1.motors import router as motors_router, set_motor_controller
 from openscan_mini.routers.v1.lights import router as lights_router, set_ringlight_controller
+from openscan_mini.routers.v1.camera import router as camera_router, set_camera_controller
 
 
 # Configure logging
@@ -105,6 +107,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app_logger.warning(f"Ringlight init failed (non-fatal): {e}")
 
+    # Camera: UC-873 Rev.D USB camera via linuxpy (V4L2)
+    try:
+        cam_cfg = HARDWARE_CONFIG.camera.capture_settings
+        cam_settings = CameraSettings(
+            focus=HARDWARE_CONFIG.camera.autofocus.get("default_focus", 2838),
+            shutter_us=cam_cfg.get("shutter_speed_us", 50000),
+            jpeg_quality=cam_cfg.get("jpeg_quality", 95),
+            saturation=cam_cfg.get("saturation"),
+            contrast=cam_cfg.get("contrast"),
+            gain=cam_cfg.get("gain"),
+        )
+        camera = CameraController(device_path="/dev/video0", settings=cam_settings)
+        set_camera_controller(camera)
+        app_logger.info("✓ Camera initialized — /dev/video0 (UC-873 Rev.D via linuxpy)")
+    except Exception as e:
+        app_logger.warning(f"Camera init failed (non-fatal): {e}")
+
     app_logger.info("✓ FastAPI application ready")
     app_logger.info(f"✓ Listening on http://0.0.0.0:8000")
     app_logger.info(f"✓ API docs available at http://0.0.0.0:8000/docs")
@@ -146,6 +165,7 @@ app.add_middleware(
 # Register routers
 app.include_router(motors_router)
 app.include_router(lights_router)
+app.include_router(camera_router)
 
 
 # ============================================================================
