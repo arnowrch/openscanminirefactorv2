@@ -51,9 +51,9 @@ class ScanStartRequest(BaseModel):
         default=None,
         description="Custom scan ID (auto-generated if omitted)"
     )
-    output_dir: str = Field(
-        default="/home/pi/openscan-scans",
-        description="Directory to save captured JPEGs"
+    output_dir: Optional[str] = Field(
+        default=None,
+        description="Directory to save captured JPEGs (default: ~/openscan-scans)"
     )
 
 
@@ -81,8 +81,9 @@ async def start_scan(request: ScanStartRequest) -> dict:
         rotor_angles=request.rotor_angles,
         turntable_steps=request.turntable_steps,
         settle_ms=request.settle_ms,
-        output_dir=request.output_dir,
     )
+    if request.output_dir:
+        config.output_dir = request.output_dir
     if request.scan_id:
         config.scan_id = request.scan_id
 

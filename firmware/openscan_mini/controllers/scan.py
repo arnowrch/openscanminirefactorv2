@@ -43,7 +43,7 @@ class ScanConfig:
     turntable_steps: int = 24       # photos per rotor position (360/steps per photo)
     settle_ms: int = 300            # wait after motor move before capture
     scan_id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
-    output_dir: str = "/home/pi/openscan-scans"
+    output_dir: str = field(default_factory=lambda: str(Path.home() / "openscan-scans"))
 
     @property
     def turntable_angle_step(self) -> float:
@@ -154,11 +154,12 @@ class ScanEngine:
 
     async def _run(self, config: ScanConfig) -> None:
         start_time = time.monotonic()
-        output_path = Path(config.output_dir) / config.scan_id
-        output_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Scan '{config.scan_id}' started — {config.total_photos} photos → {output_path}")
+        logger.info(f"Scan task '{config.scan_id}' entered _run()")
 
         try:
+            output_path = Path(config.output_dir) / config.scan_id
+            output_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Scan '{config.scan_id}' started — {config.total_photos} photos → {output_path}")
             for r_idx, rotor_angle in enumerate(config.rotor_angles):
                 if self._cancel_requested:
                     break
