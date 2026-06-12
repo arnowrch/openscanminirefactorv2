@@ -171,6 +171,26 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 [x-cloak]{display:none!important}
 .flex{display:flex}.aic{align-items:center}.jb{justify-content:space-between}.g2{gap:8px}.g3{gap:12px}.mt2{margin-top:8px}.mt3{margin-top:12px}.mono{font-family:var(--mono)}.xs{font-size:10px}.muted{color:var(--muted)}.rel{position:relative}
 
+/* Path method toggle */
+.path-toggle{display:flex;gap:4px;margin-bottom:12px}
+.path-toggle .ptb{flex:1;padding:6px 4px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all var(--tr);text-align:center;font-weight:600;letter-spacing:.04em}
+.path-toggle .ptb.on{background:var(--accent-glow);border-color:var(--accent);color:var(--accent-b)}
+/* State badge */
+.st-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-family:var(--mono)}
+.st-badge.running{background:rgba(52,211,153,.1);color:var(--emerald)}
+.st-badge.paused{background:rgba(196,168,130,.12);color:var(--gold)}
+.st-badge.error{background:rgba(248,113,113,.1);color:var(--red)}
+/* Pause/resume buttons */
+.btn-pause{background:var(--card);border:1px solid var(--border);color:var(--gold);padding:4px 10px;border-radius:var(--rs);font-size:9px;font-weight:700;cursor:pointer;letter-spacing:.05em;font-family:var(--mono)}
+.btn-pause:hover{border-color:var(--gold);background:rgba(196,168,130,.08)}
+/* Subtask bar */
+.subtask{margin-top:10px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:var(--rs)}
+.prog-bar-wrap{height:3px;background:var(--border);border-radius:2px;margin:5px 0}
+.prog-bar{height:3px;border-radius:2px;background:var(--gold);transition:width .5s ease}
+/* Project tabs */
+.proj-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}
+.proj-tab{padding:4px 10px;border-radius:5px;font-size:9px;font-weight:700;letter-spacing:.06em;font-family:var(--mono);cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:all var(--tr)}
+.proj-tab.on{background:var(--accent-glow);border-color:var(--accent);color:var(--accent-b)}
 /* Toasts */
 .toasts{position:fixed;top:62px;right:14px;z-index:500;display:flex;flex-direction:column;gap:7px;pointer-events:none}
 .toast{padding:9px 13px;border-radius:var(--rs);background:var(--card);border:1px solid var(--border);font-size:11px;box-shadow:0 4px 20px rgba(0,0,0,.45);pointer-events:auto;max-width:260px}
@@ -389,34 +409,98 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
     </div>
   </div>
 
+  <!-- CAMERA SETTINGS -->
+  <div class="wgt">
+    <div class="wgt-hdr">
+      <span class="wgt-title">Camera Settings</span>
+      <button class="btn btn-g" style="padding:3px 9px;font-size:9px" @click="saveCamSettings()" title="Persist settings to disk">Save</button>
+    </div>
+    <div class="fg" style="margin-bottom:10px">
+      <label class="lbl">Gain</label>
+      <div class="rrow">
+        <input type="range" min="0.1" max="8" step="0.1" x-model.number="camGain" @change="saveCamSettings()">
+        <span class="rval" x-text="camGain.toFixed(1)+'×'"></span>
+      </div>
+    </div>
+    <div class="fg" style="margin-bottom:10px">
+      <label class="lbl">JPEG Quality</label>
+      <div class="rrow">
+        <input type="range" min="60" max="100" step="5" x-model.number="camQuality" @change="saveCamSettings()">
+        <span class="rval" x-text="camQuality+'%'"></span>
+      </div>
+    </div>
+    <div class="flex aic g2" style="margin-bottom:4px">
+      <span class="xs muted mono">Saturation</span>
+      <input type="range" min="0" max="2" step="0.1" x-model.number="camSat" @change="saveCamSettings()" style="flex:1">
+      <span class="xs mono" style="color:var(--accent-b);min-width:28px" x-text="camSat.toFixed(1)"></span>
+    </div>
+    <div class="flex aic g2">
+      <span class="xs muted mono">Contrast</span>
+      <input type="range" min="0" max="2" step="0.1" x-model.number="camContrast" @change="saveCamSettings()" style="flex:1">
+      <span class="xs mono" style="color:var(--accent-b);min-width:28px" x-text="camContrast.toFixed(1)"></span>
+    </div>
+  </div>
+
   <!-- SCAN CONFIG (hidden while running) -->
-  <div class="wgt" x-show="scanState==='idle'||scanState==='done'||scanState==='cancelled'||scanState==='failed'">
+  <div class="wgt" x-show="!['running','paused','pending'].includes(scanState)">
     <div class="wgt-hdr">
       <span class="wgt-title">Scan Configuration</span>
       <span class="xs muted mono" x-text="totalPh+' photos'"></span>
     </div>
 
-    <div class="lbl" style="margin-bottom:6px">Rotor Angles</div>
-    <div class="tags">
-      <template x-for="(a,i) in cfg.angles" :key="i">
-        <div class="tag"><span class="mono" x-text="a+'°'"></span><span class="tag-x" @click="cfg.angles.splice(i,1)">×</span></div>
-      </template>
-    </div>
-    <div class="add-row">
-      <input class="inp" type="number" placeholder="e.g. 20" step="5" x-model.number="newAng" style="flex:1" @keydown.enter="addAng()">
-      <button class="btn btn-g" @click="addAng()">+ Add</button>
+    <!-- Path method -->
+    <div class="lbl" style="margin-bottom:6px">Path Method</div>
+    <div class="path-toggle">
+      <button class="ptb" :class="pathMethod==='sweep'?'on':''" @click="pathMethod='sweep'">Sweep Grid</button>
+      <button class="ptb" :class="pathMethod==='fibonacci'?'on':''" @click="pathMethod='fibonacci'">Fibonacci</button>
     </div>
 
-    <div class="fg" style="margin-bottom:10px">
-      <label class="lbl">Turntable Steps / position</label>
-      <div class="rrow">
-        <input type="range" min="4" max="72" step="4" x-model.number="cfg.steps">
-        <span class="rval" x-text="cfg.steps"></span>
+    <!-- SWEEP params -->
+    <div x-show="pathMethod==='sweep'">
+      <div class="lbl" style="margin-bottom:6px">Rotor Angles</div>
+      <div class="tags">
+        <template x-for="(a,i) in cfg.angles" :key="i">
+          <div class="tag"><span class="mono" x-text="a+'°'"></span><span class="tag-x" @click="cfg.angles.splice(i,1)">×</span></div>
+        </template>
       </div>
-      <span class="xs muted" x-text="(360/cfg.steps).toFixed(1)+'° per step'"></span>
+      <div class="add-row">
+        <input class="inp" type="number" placeholder="e.g. 20" step="5" x-model.number="newAng" style="flex:1" @keydown.enter="addAng()">
+        <button class="btn btn-g" @click="addAng()">+ Add</button>
+      </div>
+      <div class="fg" style="margin-bottom:10px">
+        <label class="lbl">Turntable Steps / position</label>
+        <div class="rrow">
+          <input type="range" min="4" max="72" step="4" x-model.number="cfg.steps">
+          <span class="rval" x-text="cfg.steps"></span>
+        </div>
+        <span class="xs muted" x-text="(360/cfg.steps).toFixed(1)+'° per step'"></span>
+      </div>
     </div>
 
-    <div class="fg" style="margin-bottom:14px">
+    <!-- FIBONACCI params -->
+    <div x-show="pathMethod==='fibonacci'">
+      <div class="fg" style="margin-bottom:10px">
+        <label class="lbl">Points</label>
+        <div class="rrow">
+          <input type="range" min="20" max="500" step="10" x-model.number="fibPoints">
+          <span class="rval" x-text="fibPoints"></span>
+        </div>
+      </div>
+      <div class="fg" style="margin-bottom:10px">
+        <label class="lbl">Elevation θ <span class="muted">(min / max)</span></label>
+        <div class="flex g2">
+          <div class="rrow" style="flex:1"><input type="range" min="0" max="90" step="1" x-model.number="minTheta"><span class="rval" x-text="minTheta+'°'"></span></div>
+          <div class="rrow" style="flex:1"><input type="range" min="90" max="175" step="1" x-model.number="maxTheta"><span class="rval" x-text="maxTheta+'°'"></span></div>
+        </div>
+      </div>
+      <div class="flex aic g2" style="margin-bottom:10px">
+        <label class="lbl" style="white-space:nowrap">TSP Optimize</label>
+        <button class="btn" :class="optimizePath?'btn-p':'btn-g'" style="font-size:9px;padding:3px 9px" @click="optimizePath=!optimizePath" x-text="optimizePath?'ON':'OFF'"></button>
+      </div>
+    </div>
+
+    <!-- Settle time (shared) -->
+    <div class="fg" style="margin-bottom:10px">
       <label class="lbl">Settle Time</label>
       <div class="rrow">
         <input type="range" min="0" max="2000" step="50" x-model.number="cfg.settle">
@@ -424,47 +508,92 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
       </div>
     </div>
 
+    <!-- Focus stacking -->
+    <div class="fg" style="margin-bottom:10px">
+      <label class="lbl">Focus Stacks <span class="muted">(1 = off)</span></label>
+      <div class="rrow">
+        <input type="range" min="1" max="9" step="1" x-model.number="focusStacks">
+        <span class="rval" x-text="focusStacks===1?'off':focusStacks+'×'"></span>
+      </div>
+    </div>
+    <div x-show="focusStacks>1" style="margin-bottom:10px">
+      <label class="lbl">Focus Range <span class="muted">(diopters)</span></label>
+      <div class="flex g2">
+        <div class="rrow" style="flex:1"><input type="range" min="0" max="14" step="0.5" x-model.number="focusRangeMin"><span class="rval" x-text="focusRangeMin+'d'"></span></div>
+        <div class="rrow" style="flex:1"><input type="range" min="1" max="32" step="0.5" x-model.number="focusRangeMax"><span class="rval" x-text="focusRangeMax+'d'"></span></div>
+      </div>
+    </div>
+
+    <!-- Project name -->
+    <div class="fg" style="margin-bottom:14px">
+      <label class="lbl">Project</label>
+      <input class="inp" type="text" placeholder="default" x-model="projectName" style="font-size:11px">
+    </div>
+
     <div class="est"><strong x-text="totalPh"></strong> photos · <strong x-text="estMin"></strong> min est.</div>
 
-    <button class="scan-btn" @click="startScan()" :disabled="cfg.angles.length===0||!camOk">
+    <button class="scan-btn" @click="startScan()" :disabled="(pathMethod==='sweep'&&cfg.angles.length===0)||!camOk">
       ▶ START SCAN
     </button>
   </div>
 
-  <!-- PROGRESS -->
-  <div class="wgt" x-show="scanState==='running'">
+  <!-- PROGRESS (running or paused) -->
+  <div class="wgt" x-show="['running','paused','pending'].includes(scanState)">
     <div class="wgt-hdr">
-      <span class="wgt-title">Scan in Progress</span>
-      <button class="btn btn-d" style="padding:3px 9px;font-size:9px" @click="stopScan()">■ STOP</button>
+      <div class="flex aic g2">
+        <span class="wgt-title">Scan</span>
+        <span class="st-badge" :class="scanState" x-text="scanState.toUpperCase()"></span>
+      </div>
+      <div class="flex g2">
+        <button class="btn-pause" x-show="scanState==='running'" @click="pauseScan()">⏸ PAUSE</button>
+        <button class="btn-pause" x-show="scanState==='paused'" @click="resumeScan()" style="color:var(--emerald)">▶ RESUME</button>
+        <button class="btn btn-d" style="padding:3px 9px;font-size:9px" @click="stopScan()">■ STOP</button>
+      </div>
     </div>
     <div class="ring-wrap">
       <svg class="ring-svg" width="118" height="118" viewBox="0 0 118 118">
         <circle class="ring-track" cx="59" cy="59" r="51"/>
         <circle class="ring-fill" cx="59" cy="59" r="51"
           :stroke-dasharray="2*Math.PI*51"
-          :stroke-dashoffset="2*Math.PI*51*(1-(sp?.percent||0)/100)"/>
+          :stroke-dashoffset="2*Math.PI*51*(1-(sp?.percent||0)/100)"
+          :stroke="scanState==='paused'?'var(--gold)':'var(--accent)'"/>
       </svg>
       <div class="ring-center">
         <div class="ring-pct" x-text="(sp?.percent||0).toFixed(0)+'%'"></div>
-        <div class="ring-sub" x-text="(sp?.captured||0)+'/'+(sp?.total||0)"></div>
+        <div class="ring-sub" x-text="(sp?.current||0)+'/'+(sp?.total||0)"></div>
       </div>
     </div>
     <div class="stats">
-      <div><div class="stat-lbl">Rotor</div><div class="stat-val a" x-text="(sp?.current_rotor||0).toFixed(1)+'°'"></div></div>
-      <div><div class="stat-lbl">Turntable</div><div class="stat-val a" x-text="(sp?.current_turntable||0).toFixed(1)+'°'"></div></div>
-      <div><div class="stat-lbl">Elapsed</div><div class="stat-val" x-text="fmtT(sp?.elapsed_s||0)"></div></div>
-      <div><div class="stat-lbl">ETA</div><div class="stat-val g" x-text="sp?.eta_s?fmtT(sp.eta_s):'—'"></div></div>
+      <div><div class="stat-lbl">Project</div><div class="stat-val a" style="font-size:11px;word-break:break-all" x-text="sp?.project||projectName||'—'"></div></div>
+      <div><div class="stat-lbl">ETA</div><div class="stat-val g" x-text="etaStr||'—'"></div></div>
     </div>
-    <div class="mono xs muted mt2" style="word-break:break-all" x-text="sp?.current_file||''"></div>
+    <div class="mono xs muted mt2" style="word-break:break-all" x-text="sp?.message||''"></div>
+    <!-- Focus stacking subtask -->
+    <div class="subtask" x-show="focusTaskPct!==null" x-transition>
+      <div class="flex aic jb">
+        <span class="xs muted">Focus Stacking</span>
+        <span class="xs mono" style="color:var(--gold)" x-text="(focusTaskPct||0).toFixed(0)+'%'"></span>
+      </div>
+      <div class="prog-bar-wrap"><div class="prog-bar" :style="'width:'+(focusTaskPct||0)+'%'"></div></div>
+    </div>
   </div>
 
-  <!-- DONE -->
-  <div class="wgt" x-show="scanState==='done'" x-transition>
+  <!-- DONE / ERROR -->
+  <div class="wgt" x-show="['completed','cancelled','error','interrupted'].includes(scanState)" x-transition>
     <div style="text-align:center;padding:6px 0">
-      <div style="font-size:26px;margin-bottom:8px">✓</div>
-      <div style="color:var(--emerald);font-weight:600;font-size:12px" x-text="'Done — '+(sp?.captured||0)+' photos'"></div>
-      <div class="xs muted mt2" x-text="fmtT(sp?.elapsed_s||0)+' elapsed'"></div>
-      <button class="btn btn-g" style="margin-top:12px;width:100%" @click="scanState='idle';loadLib()">New Scan</button>
+      <div style="font-size:26px;margin-bottom:8px" x-text="scanState==='completed'?'✓':'✕'"></div>
+      <div :style="scanState==='completed'?'color:var(--emerald)':'color:var(--red)'" style="font-weight:600;font-size:12px"
+           x-text="scanState==='completed'?('Done — '+(sp?.current||0)+' photos'):scanState.charAt(0).toUpperCase()+scanState.slice(1)"></div>
+      <div class="xs muted mt2" x-show="sp?.error" x-text="sp?.error"></div>
+      <!-- Focus stacking running after scan complete -->
+      <div class="subtask mt3" x-show="focusTaskPct!==null&&focusTaskPct<100" x-transition>
+        <div class="flex aic jb">
+          <span class="xs muted">Focus Stacking in progress…</span>
+          <span class="xs mono" style="color:var(--gold)" x-text="(focusTaskPct||0).toFixed(0)+'%'"></span>
+        </div>
+        <div class="prog-bar-wrap"><div class="prog-bar" :style="'width:'+(focusTaskPct||0)+'%'"></div></div>
+      </div>
+      <button class="btn btn-g" style="margin-top:12px;width:100%" @click="scanState='idle';sp=null;focusTaskPct=null;loadLib()">New Scan</button>
     </div>
   </div>
 
@@ -475,26 +604,37 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
 <section class="lib">
   <div class="lib-hdr">
     <span class="sec-ttl">Scan Library</span>
-    <span class="xs muted" x-text="scans.length+' scans'"></span>
+    <span class="xs muted" x-text="totalScans+' scans'"></span>
     <div class="spacer"></div>
     <button class="btn btn-g" style="font-size:10px;padding:4px 9px" @click="loadLib()">↻ Refresh</button>
   </div>
 
-  <div class="xs muted" style="padding:20px 0;text-align:center" x-show="scans.length===0">
+  <div class="xs muted" style="padding:20px 0;text-align:center" x-show="projects.length===0">
     No scans yet. Configure and run your first scan above.
   </div>
 
-  <div class="lib-grid">
-    <template x-for="s in scans" :key="s.scan_id">
-      <div class="s-card" :class="selScan===s.scan_id?'sel':''" @click="pickScan(s.scan_id)">
-        <div class="s-id" x-text="s.scan_id"></div>
+  <!-- Project tabs -->
+  <div class="proj-tabs" x-show="projects.length>0">
+    <template x-for="p in projects" :key="p.name">
+      <button class="proj-tab" :class="selProject===p.name?'on':''" @click="selProject=p.name;selScan=null;selFiles=[]"
+              x-text="p.name+' ('+p.scan_count+')'"></button>
+    </template>
+  </div>
+
+  <!-- Scans in selected project -->
+  <div class="lib-grid" x-show="selProject">
+    <template x-for="s in currentProjectScans" :key="s.scan_id||s.index">
+      <div class="s-card" :class="selScan===scanKey(s)?'sel':''" @click="pickScan(s)">
+        <div class="s-id" x-text="s.index!==null?'scan'+String(s.index).padStart(2,'0'):s.scan_id"></div>
         <div class="s-meta">
           <span class="mc" x-text="s.photo_count+' photos'"></span>
-          <span class="mc" x-text="s.size_mb+' MB'"></span>
+          <span class="mc" :style="s.status==='completed'?'color:var(--emerald)':s.status==='running'?'color:var(--accent-b)':''"
+                x-text="s.status||'done'"></span>
+          <span class="mc" x-show="s.focus_task_id" style="color:var(--gold)">stacked</span>
         </div>
         <div class="s-actions" @click.stop>
-          <button class="btn btn-g" style="flex:1;font-size:9px;padding:4px" @click="pickScan(s.scan_id)">Browse</button>
-          <button class="btn btn-d" style="font-size:9px;padding:4px 7px" @click="delScan(s.scan_id)">Del</button>
+          <button class="btn btn-g" style="flex:1;font-size:9px;padding:4px" @click="pickScan(s)">Browse</button>
+          <button class="btn btn-d" style="font-size:9px;padding:4px 7px" @click="delScanEntry(s)">Del</button>
         </div>
       </div>
     </template>
@@ -506,14 +646,14 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
       <span class="sec-ttl" x-text="selScan"></span>
       <div class="flex g2">
         <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="dlAll()">↓ All</button>
-        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="selScan=null">✕</button>
+        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="selScan=null;selFiles=[]">✕</button>
       </div>
     </div>
     <div class="pgrid">
       <template x-for="f in selFiles" :key="f.filename">
         <div>
-          <div class="pthumb" @click="openPhoto(f.filename)">
-            <img :src="api+'/scan/library/'+selScan+'/'+f.filename" loading="lazy" alt="">
+          <div class="pthumb" @click="openPhotoUrl(f.download_url)">
+            <img :src="api.replace('/api/v1','')+f.download_url" loading="lazy" alt="">
           </div>
           <div class="pname" x-text="f.filename"></div>
         </div>
@@ -533,8 +673,8 @@ function app(){return{
   // camera
   xhair:true, camOk:false, capturing:false,
   camFocus:0, camShutterMs:50, camAF:true, previewRot:-90,
+  camGain:1.0, camQuality:95, camSat:1.0, camContrast:1.0,
   streamOk:false, streamErr:0,
-  // analysis overlay
   an:{sharpness:0,brightness:0,is_sharp:false,is_exposed:false,auto_adjust:true,crop_box:null},
 
   // ringlight
@@ -546,20 +686,35 @@ function app(){return{
   rotorEndstop:false, tableEndstop:false,
   _jogTimer:null,
 
-  // scan
+  // scan config
   scanState:'idle', sp:null,
   cfg:{angles:[-20,0,20,40], steps:24, settle:300},
   newAng:'',
+  pathMethod:'sweep',
+  fibPoints:130, minTheta:12, maxTheta:125,
+  optimizePath:true,
+  focusStacks:1, focusRangeMin:8.0, focusRangeMax:14.0,
+  projectName:'default',
+  focusTaskId:null, focusTaskPct:null,
+  _scanStartTs:null, etaStr:null,
 
   // library
-  scans:[], selScan:null, selFiles:[],
+  projects:[], selProject:null, selScan:null, selFiles:[],
 
   // toasts
   toasts:[], _tid:0,
 
   /* ─ computed ─ */
-  get totalPh(){return this.cfg.angles.length*this.cfg.steps},
-  get estMin(){return Math.ceil(this.totalPh*4/60)},
+  get totalPh(){
+    if(this.pathMethod==='fibonacci') return this.fibPoints;
+    return this.cfg.angles.length*this.cfg.steps;
+  },
+  get estMin(){return Math.ceil(this.totalPh*(this.cfg.settle/1000+0.8+0.5)/60)},
+  get totalScans(){return this.projects.reduce((s,p)=>s+p.scan_count,0)},
+  get currentProjectScans(){
+    const p=this.projects.find(p=>p.name===this.selProject);
+    return p?[...p.scans].reverse():[];
+  },
 
   /* ─ init ─ */
   get streamUrl(){return `${this.api}/hardware/camera/stream`},
@@ -567,20 +722,51 @@ function app(){return{
   async init(){
     await Promise.all([this.fetchMotors(),this.fetchCam(),this.loadLib(),this.fetchScan(),this.fetchRL()]);
     this.connectWS();
-    // Analysis polled every 3s — stream itself runs natively in the <img> tag
     setInterval(()=>this.fetchAnalysis(),3000);
     this.fetchAnalysis();
-    // Endstop state polled every 1.2s
     setInterval(()=>this.fetchEndstops(),1200);
     this.fetchEndstops();
   },
 
   /* ─ camera ─ */
   async fetchCam(){
-    try{const r=await fetch(`${this.api}/hardware/camera/`);if(r.ok){const d=await r.json();
-      this.camOk=d.available;this.camAF=d.settings?.autofocus??true;
-      this.camFocus=d.settings?.lens_position??0;this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
-    }}catch(e){}
+    try{const r=await fetch(`${this.api}/hardware/camera/settings`);
+      if(r.ok){const d=await r.json();
+        this.camOk=true;
+        this.camAF=d.autofocus??true;
+        this.camFocus=d.lens_position??0;
+        this.camShutterMs=Math.round((d.shutter_us??50000)/1000);
+        this.camGain=d.gain??1.0;
+        this.camQuality=d.jpeg_quality??95;
+        this.camSat=d.saturation??1.0;
+        this.camContrast=d.contrast??1.0;
+      }else{
+        // fallback to status endpoint
+        const r2=await fetch(`${this.api}/hardware/camera/`);
+        if(r2.ok){const d=await r2.json();
+          this.camOk=d.available;
+          this.camAF=d.settings?.autofocus??true;
+          this.camFocus=d.settings?.lens_position??0;
+          this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
+        }
+      }
+    }catch(e){}
+  },
+  async saveCamSettings(){
+    try{
+      const body={
+        shutter_us:this.camShutterMs*1000,
+        gain:this.camGain,
+        jpeg_quality:this.camQuality,
+        saturation:this.camSat,
+        contrast:this.camContrast,
+        autofocus:this.camAF,
+        lens_position:this.camFocus,
+      };
+      const r=await fetch(`${this.api}/hardware/camera/settings`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(r.ok)this.toast('Camera settings saved','success');
+      else this.toast('Save failed','error');
+    }catch(e){this.toast('Error: '+e.message,'error');}
   },
   async fetchAnalysis(){
     try{const r=await fetch(`${this.api}/hardware/camera/analysis`);
@@ -588,9 +774,8 @@ function app(){return{
         if(d.suggested_shutter_us)this.camShutterMs=Math.round(d.suggested_shutter_us/1000);
       }}catch(e){}
   },
-  onStreamLoad(){this.streamOk=true;this.streamErr=0;},
+  onStreamLoad(){this.streamOk=true;this.streamErr=0;this.camOk=true;},
   onStreamError(){this.streamOk=false;this.streamErr++;
-    // retry stream after 2s on error
     setTimeout(()=>{const el=this.$refs.streamImg;if(el){el.src='';el.src=this.streamUrl;}},2000);
   },
   async capturePhoto(){
@@ -609,7 +794,7 @@ function app(){return{
   async fetchRL(){try{const r=await fetch(`${this.api}/hardware/lights/`);if(r.ok){const d=await r.json();this.rlOn=d.is_on??false;this.rlBright=d.brightness??100;}}catch(e){}},
   async rlTurnOn(){try{await fetch(`${this.api}/hardware/lights/on?brightness=${this.rlBright}`,{method:'POST'});this.rlOn=true;this.toast('Ringlight on','info');}catch(e){}},
   async rlTurnOff(){try{await fetch(`${this.api}/hardware/lights/off`,{method:'POST'});this.rlOn=false;this.toast('Ringlight off','info');}catch(e){}},
-  async rlSetBright(v){try{const r=await fetch(`${this.api}/hardware/lights/brightness`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brightness:v})});if(r.ok&&this.rlOn)this.toast('Brightness '+v+'%','info');}catch(e){}},
+  async rlSetBright(v){try{await fetch(`${this.api}/hardware/lights/brightness`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brightness:v})});if(this.rlOn)this.toast('Brightness '+v+'%','info');}catch(e){}},
 
   /* ─ motors ─ */
   async fetchMotors(){
@@ -644,43 +829,120 @@ function app(){return{
 
   /* ─ scan ─ */
   addAng(){const v=parseFloat(this.newAng);if(!isNaN(v)&&!this.cfg.angles.includes(v)){this.cfg.angles.push(v);this.cfg.angles.sort((a,b)=>a-b);}this.newAng=''},
-  async fetchScan(){try{const r=await fetch(`${this.api}/scan/`);if(r.ok){const d=await r.json();this.scanState=d.state||'idle';if(d.state!=='idle')this.sp=d;}}catch(e){}},
+  async fetchScan(){
+    try{const r=await fetch(`${this.api}/scan/`);if(r.ok){const d=await r.json();
+      const st=d.state||'idle';
+      this.scanState=st==='completed'?'completed':st==='cancelled'?'cancelled':st==='error'?'error':st;
+      if(st!=='idle')this.sp=d;
+    }}catch(e){}
+  },
   async startScan(){
-    try{const r=await fetch(`${this.api}/scan/start`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({rotor_angles:this.cfg.angles,turntable_steps:this.cfg.steps,settle_ms:this.cfg.settle})});
-      if(r.ok){const d=await r.json();this.scanState='running';this.toast('Scan started — '+d.total_photos+' photos','success');}
+    this._scanStartTs=Date.now();
+    this.etaStr=null;this.focusTaskPct=null;this.focusTaskId=null;
+    const body={
+      path_method:this.pathMethod,
+      rotor_angles:this.cfg.angles,
+      turntable_steps:this.cfg.steps,
+      points:this.fibPoints,
+      min_theta:this.minTheta,
+      max_theta:this.maxTheta,
+      optimize_path:this.optimizePath,
+      focus_stacks:this.focusStacks,
+      focus_range:[this.focusRangeMin,this.focusRangeMax],
+      settle_ms:this.cfg.settle,
+      project_name:this.projectName||'default',
+    };
+    try{const r=await fetch(`${this.api}/scan/start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(r.ok){const d=await r.json();this.scanState='running';this.toast('Scan started ('+this.pathMethod+')','success');}
       else{const e=await r.json();this.toast('Error: '+e.detail,'error');}
     }catch(e){this.toast('Failed: '+e.message,'error');}
   },
   async stopScan(){try{await fetch(`${this.api}/scan/stop`,{method:'POST'});this.toast('Stop requested','warning');}catch(e){}},
+  async pauseScan(){try{await fetch(`${this.api}/scan/pause`,{method:'POST'});this.scanState='paused';this.toast('Scan paused','warning');}catch(e){}},
+  async resumeScan(){try{await fetch(`${this.api}/scan/resume`,{method:'POST'});this.scanState='running';this.toast('Scan resumed','info');}catch(e){}},
+
+  /* ETA helper — recomputed from progress */
+  _updateEta(){
+    if(!this.sp||!this._scanStartTs)return;
+    const pct=(this.sp.percent||0)/100;
+    if(pct<=0.02){this.etaStr=null;return;}
+    const elapsed=(Date.now()-this._scanStartTs)/1000;
+    const total=elapsed/pct;
+    const rem=total-elapsed;
+    this.etaStr=this.fmtT(rem);
+  },
 
   /* ─ websocket ─ */
   connectWS(){
     try{this.ws=new WebSocket(this.wsUrl);
       this.ws.onopen=()=>{this.wsOk=true};
       this.ws.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.type)return;
-        if(d.state){this.scanState=d.state;this.sp=d;
-          if(d.state==='done'){this.toast('Scan done — '+d.captured+' photos in '+this.fmtT(d.elapsed_s),'success');this.loadLib();}
-          else if(d.state==='failed')this.toast('Scan failed: '+(d.error||'unknown'),'error');}};
+        if(!d.state)return;
+        const prev=this.scanState;
+        this.scanState=d.state;
+        this.sp=d;
+        this._updateEta();
+        if(d.state==='completed'&&prev!=='completed'){
+          this.toast('Scan done — '+(d.current||0)+' photos','success');
+          this.loadLib();
+          // poll focus task if present
+          if(d.focus_task_id||this.focusTaskId){
+            this.focusTaskId=d.focus_task_id||this.focusTaskId;
+            this._pollFocusTask();
+          }
+        } else if(d.state==='error')this.toast('Scan error: '+(d.error||'unknown'),'error');
+        else if(d.state==='cancelled')this.toast('Scan cancelled','warning');
+      };
       this.ws.onclose=()=>{this.wsOk=false;setTimeout(()=>this.connectWS(),3000)};
       this.ws.onerror=()=>{this.wsOk=false};
     }catch(e){setTimeout(()=>this.connectWS(),3000);}
   },
+  async _pollFocusTask(){
+    if(!this.focusTaskId)return;
+    try{const r=await fetch(`${this.api}/tasks/${this.focusTaskId}`);
+      if(r.ok){const d=await r.json();
+        this.focusTaskPct=d.progress?.percent??null;
+        if(d.status==='running'||d.status==='pending')setTimeout(()=>this._pollFocusTask(),1500);
+        else if(d.status==='completed'){this.focusTaskPct=100;this.toast('Focus stacking done','success');this.loadLib();}
+      }
+    }catch(e){}
+  },
 
   /* ─ library ─ */
-  async loadLib(){try{const r=await fetch(`${this.api}/scan/library`);if(r.ok){const d=await r.json();this.scans=d.scans||[];}}catch(e){}},
-  async pickScan(id){
-    if(this.selScan===id){this.selScan=null;this.selFiles=[];return;}
-    this.selScan=id;
-    try{const r=await fetch(`${this.api}/scan/library/${id}`);if(r.ok){const d=await r.json();this.selFiles=d.files||[];}}catch(e){}
+  async loadLib(){
+    try{const r=await fetch(`${this.api}/scan/library`);
+      if(r.ok){const d=await r.json();
+        this.projects=d.projects||[];
+        // auto-select first project if none selected
+        if(!this.selProject&&this.projects.length>0)this.selProject=this.projects[0].name;
+      }
+    }catch(e){}
   },
-  async delScan(id){
-    if(!confirm('Delete scan "'+id+'"?'))return;
-    try{const r=await fetch(`${this.api}/scan/library/${id}`,{method:'DELETE'});
-      if(r.ok){this.scans=this.scans.filter(s=>s.scan_id!==id);if(this.selScan===id){this.selScan=null;this.selFiles=[];}this.toast('Deleted','info');}}catch(e){}
+  scanKey(s){return s.index!==null?`${this.selProject}/${s.index}`:s.scan_id},
+  async pickScan(s){
+    const key=this.scanKey(s);
+    if(this.selScan===key){this.selScan=null;this.selFiles=[];return;}
+    this.selScan=key;
+    try{
+      let url;
+      if(s.index!==null)url=`${this.api}/scan/library/${this.selProject}/${s.index}`;
+      else url=`${this.api}/scan/library/${s.scan_id}`;
+      const r=await fetch(url);if(r.ok){const d=await r.json();this.selFiles=d.files||[];}
+    }catch(e){}
   },
-  openPhoto(fn){window.open(`${this.api}/scan/library/${this.selScan}/${fn}`)},
-  dlAll(){for(const f of this.selFiles){const a=document.createElement('a');a.href=`${this.api}/scan/library/${this.selScan}/${f.filename}`;a.download=f.filename;a.click();}},
+  async delScanEntry(s){
+    const label=s.index!==null?`scan${String(s.index).padStart(2,'0')}`:s.scan_id;
+    if(!confirm('Delete "'+label+'"?'))return;
+    try{
+      let url;
+      if(s.index!==null)url=`${this.api}/scan/library/${this.selProject}/${s.index}`;
+      else url=`${this.api}/scan/library/${s.scan_id}`;
+      const r=await fetch(url,{method:'DELETE'});
+      if(r.ok){if(this.selScan===this.scanKey(s)){this.selScan=null;this.selFiles=[];}this.loadLib();this.toast('Deleted','info');}
+    }catch(e){}
+  },
+  openPhotoUrl(url){window.open(this.api.replace('/api/v1','')+url)},
+  dlAll(){for(const f of this.selFiles){const a=document.createElement('a');a.href=this.api.replace('/api/v1','')+f.download_url;a.download=f.filename;a.click();}},
 
   /* ─ utils ─ */
   fmtT(s){if(!s)return'0s';const m=Math.floor(s/60),sec=Math.round(s%60);return m>0?m+'m '+sec+'s':sec+'s'},
