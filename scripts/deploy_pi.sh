@@ -26,6 +26,8 @@ echo ""
 echo "=== 4. Install pip packages into venv ==="
 source ~/openscan_env/bin/activate
 pip install --quiet fastapi "uvicorn[standard]" pydantic aiofiles
+# editable install so openscan_mini is importable after venv recreate
+pip install --quiet -e ~/openscan-firmware/firmware
 
 echo ""
 echo "=== 5. Restart server ==="
@@ -44,7 +46,7 @@ grep -i "picamera\|lgpio\|ringlight\|camera\|error" ~/openscan-server.log | tail
 
 echo ""
 echo "=== 7. API smoke test ==="
-curl -s http://localhost:8000/api/v1/hardware/camera/status | python3 -m json.tool || true
+curl -s http://localhost:8000/api/v1/hardware/camera/ | python3 -m json.tool || true
 echo ""
 curl -s http://localhost:8000/api/v1/hardware/lights/ | python3 -m json.tool || true
 
