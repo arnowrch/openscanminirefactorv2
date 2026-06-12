@@ -145,13 +145,15 @@ class CameraController:
             })
 
     def _encode_jpeg(self, array) -> bytes:
-        """Encode numpy RGB array to JPEG bytes."""
         try:
             from PIL import Image
         except ImportError:
             raise RuntimeError("Pillow not installed: pip install Pillow")
+        img = Image.fromarray(array)
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
         buf = io.BytesIO()
-        Image.fromarray(array).save(buf, format="JPEG", quality=self.settings.jpeg_quality)
+        img.save(buf, format="JPEG", quality=self.settings.jpeg_quality)
         return buf.getvalue()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -257,7 +259,10 @@ class CameraController:
         buf = io.BytesIO()
         try:
             from PIL import Image
-            Image.fromarray(array).save(buf, format="JPEG", quality=75)
+            img = Image.fromarray(array)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            img.save(buf, format="JPEG", quality=75)
         except ImportError:
             raise RuntimeError("Pillow not installed: pip install Pillow")
         data = buf.getvalue()
