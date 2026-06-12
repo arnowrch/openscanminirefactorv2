@@ -8,31 +8,47 @@ from the hardware_greenshield.json file.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 logger = logging.getLogger(__name__)
 
 
 class MotorConfig(BaseModel):
-    """Motor configuration (rotor or turntable)."""
+    """Motor configuration — field names match OpenScan3 settings JSON."""
 
-    description: str
+    model_config = ConfigDict(extra="ignore")
+
+    # Pin assignments (OpenScan3 uses direction_pin, we alias both)
     step_pin: int
-    dir_pin: int
+    dir_pin: Optional[int] = None
+    direction_pin: Optional[int] = None  # OS3 name
     enable_pin: int
+
     steps_per_rotation: int
-    angle_per_step: float
-    max_speed_steps_sec: int
-    max_angle_sec: float
-    acceleration_steps_sec2: int
-    min_angle: float
-    max_angle: float
+    max_speed_steps_sec: int = Field(default=5000, alias="max_speed")
+    acceleration_steps_sec2: int = Field(default=20000, alias="acceleration")
+    min_angle: float = 0.0
+    max_angle: float = 360.0
     direction: int = 1
-    acceleration_ramp: int
-    delay_base: float
+
+    # Optional / legacy fields
+    description: Optional[str] = None
+    angle_per_step: Optional[float] = None
+    max_angle_sec: Optional[float] = None
+    acceleration_ramp: Optional[int] = None
+    delay_base: Optional[float] = None
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    def model_post_init(self, __context: Any) -> None:
+        # Normalise: dir_pin takes precedence, fall back to direction_pin
+        if self.dir_pin is None and self.direction_pin is not None:
+            object.__setattr__(self, "dir_pin", self.direction_pin)
+        elif self.dir_pin is None:
+            raise ValueError("Either dir_pin or direction_pin must be set.")
 
 
 class EndstopConfig(BaseModel):
@@ -62,14 +78,17 @@ class CameraConfig(BaseModel):
 class RinglightChannelConfig(BaseModel):
     """Single ringlight PWM channel configuration."""
 
+    model_config = ConfigDict(extra="ignore")
+
     id: int
     gpio_pin: int
-    pwm_capable: bool
-    pwm_frequency_hz: int
-    circuit: str
-    components: list[str]
-    control_range: list[int]
-    brightness_mapping: str
+    pwm_capable: bool = True
+    pwm_frequency_hz: int = 1000
+    circuit: Optional[str] = None
+    description: Optional[str] = None
+    components: Optional[List[str]] = None
+    control_range: List[int] = [0, 255]
+    brightness_mapping: str = "linear"
 
 
 class RinglightConfig(BaseModel):
@@ -97,20 +116,17 @@ class DeviceConfig(BaseModel):
 class HardwareConfig(BaseModel):
     """Complete hardware configuration."""
 
+    model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True)
+
     device: DeviceConfig
     motors: Dict[str, MotorConfig]
     endstops: Optional[Dict[str, EndstopConfig]] = None
     camera: CameraConfig
     ringlight: RinglightConfig
     gpio_pins: Dict[str, Any]
-    interfaces: Dict[str, Any]
-    performance: Dict[str, Any]
-    software: Dict[str, Any]
-
-    class Config:
-        """Pydantic config."""
-
-        arbitrary_types_allowed = True
+    interfaces: Optional[Dict[str, Any]] = None
+    performance: Optional[Dict[str, Any]] = None
+    software: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_json_file(cls, filepath: Path | str) -> "HardwareConfig":
