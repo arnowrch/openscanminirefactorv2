@@ -120,38 +120,49 @@ class CameraController:
         logger.info("picamera2 started — IMX519, persistent session")
 
     def _apply_focus(self, mode: str = "preview"):
-        """Set AF mode: continuous for preview, one-shot for photo."""
+        """Set AF mode: continuous for preview, one-shot+window for photo."""
         s = self.settings
-        try:
-            if s.autofocus:
-                # PixelArraySize returns a libcamera.Size object — not a tuple
-                pix = self._picam.camera_properties["PixelArraySize"]
-                full_x = pix.width if hasattr(pix, "width") else int(pix[0])
-                full_y = pix.height if hasattr(pix, "height") else int(pix[1])
-
-                # Central 20% AF window (larger than OS3's 10% — more reliable)
-                win_w = max(1, full_x // 5)
-                win_h = max(1, full_y // 5)
-                x0 = (full_x - win_w) // 2
-                y0 = (full_y - win_h) // 2
-
-                self._picam.set_controls({
-                    "AfMetering": _lc_controls.AfMeteringEnum.Windows,
-                    "AfWindows": [(x0, y0, win_w, win_h)],
-                    "AfMode": (_lc_controls.AfModeEnum.Continuous
-                               if mode == "preview"
-                               else _lc_controls.AfModeEnum.Auto),
-                })
-                logger.info(f"AF mode={mode} window=({x0},{y0},{win_w},{win_h})")
-            else:
+        if not s.autofocus:
+            try:
                 lp = max(0.0, s.lens_position)
                 self._picam.set_controls({
                     "AfMode": _lc_controls.AfModeEnum.Manual,
                     "LensPosition": lp,
                 })
                 logger.info(f"Manual focus: {lp:.2f} diopters")
-        except Exception as e:
-            logger.error(f"_apply_focus failed: {e}")
+            except Exception as e:
+                logger.error(f"_apply_focus manual failed: {e}")
+            return
+
+        if mode == "preview":
+            # Continuous AF — no custom window, let libcamera decide metering.
+            # Adding a window here causes silent failures on some libcamera builds.
+            try:
+                self._picam.set_controls({
+                    "AfMode": _lc_controls.AfModeEnum.Continuous,
+                    "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
+                })
+                logger.info("AF continuous started")
+            except Exception as e:
+                logger.error(f"_apply_focus continuous failed: {e}")
+        else:
+            # Photo: one-shot with central 20% window for precise focus
+            try:
+                pix = self._picam.camera_properties["PixelArraySize"]
+                full_x = pix.width if hasattr(pix, "width") else int(pix[0])
+                full_y = pix.height if hasattr(pix, "height") else int(pix[1])
+                win_w = max(1, full_x // 5)
+                win_h = max(1, full_y // 5)
+                x0 = (full_x - win_w) // 2
+                y0 = (full_y - win_h) // 2
+                self._picam.set_controls({
+                    "AfMode": _lc_controls.AfModeEnum.Auto,
+                    "AfMetering": _lc_controls.AfMeteringEnum.Windows,
+                    "AfWindows": [(x0, y0, win_w, win_h)],
+                })
+                logger.info(f"AF one-shot window=({x0},{y0},{win_w},{win_h})")
+            except Exception as e:
+                logger.error(f"_apply_focus photo failed: {e}")
 
     def _encode_jpeg(self, array) -> bytes:
         try:
