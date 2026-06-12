@@ -4,184 +4,251 @@
     "model": "mini",
     "shield": "greenshield",
     "pi_model": "Raspberry Pi 4",
-    "os": "Raspberry Pi OS (Bookworm) 64-bit",
-    "notes": "High-performance refactored firmware with ArUco homing and networked photogrammetry"
+    "os": "Raspberry Pi OS (Bookworm/Trixie) 64-bit",
+    "notes": "GPIO pins verified from original OpenScan2 firmware image (2024-09-09). Camera: UC-873 Rev.D"
   },
 
   "motors": {
     "rotor": {
-      "description": "Camera arm rotation (0-145° tilt)",
-      "step_pin": 27,
-      "dir_pin": 17,
-      "enable_pin": 22,
-      "steps_per_rotation": 10240,
-      "angle_per_step": 0.03515625,
+      "description": "Camera arm rotation (tilt axis)",
+      "step_pin": 6,
+      "dir_pin": 5,
+      "enable_pin": 23,
+      "steps_per_rotation": 48000,
+      "angle_per_step": 0.0075,
       "max_speed_steps_sec": 5000,
-      "max_angle_sec": 175.78,
+      "max_angle_sec": 37.5,
       "acceleration_steps_sec2": 10000,
-      "min_angle": 0,
-      "max_angle": 145,
+      "min_angle": -20,
+      "max_angle": 60,
       "direction": 1,
-      "acceleration_ramp": 5000,
+      "acceleration_ramp": 2000,
       "delay_base": 0.0001
     },
     "turntable": {
-      "description": "Object rotation (0-360°)",
-      "step_pin": 16,
-      "dir_pin": 6,
+      "description": "Object rotation (360°)",
+      "step_pin": 11,
+      "dir_pin": 9,
       "enable_pin": 22,
-      "steps_per_rotation": 800,
-      "angle_per_step": 0.45,
+      "steps_per_rotation": 3200,
+      "angle_per_step": 0.1125,
       "max_speed_steps_sec": 3000,
-      "max_angle_sec": 1350.0,
+      "max_angle_sec": 337.5,
       "acceleration_steps_sec2": 8000,
       "min_angle": 0,
       "max_angle": 360,
       "direction": 1,
-      "acceleration_ramp": 4000,
-      "delay_base": 0.0002
+      "acceleration_ramp": 200,
+      "delay_base": 0.0001
+    },
+    "extra": {
+      "description": "Optional 3rd motor (future use)",
+      "step_pin": 20,
+      "dir_pin": 21,
+      "enable_pin": 19,
+      "steps_per_rotation": 3200,
+      "angle_per_step": 0.1125,
+      "max_speed_steps_sec": 3000,
+      "max_angle_sec": 337.5,
+      "acceleration_steps_sec2": 8000,
+      "min_angle": 0,
+      "max_angle": 360,
+      "direction": 1,
+      "acceleration_ramp": 200,
+      "delay_base": 0.0001
     }
   },
 
   "endstops": {
-    "rotor": {
-      "pin": 18,
-      "position_angle": 145,
+    "endstop1": {
+      "pin": 24,
+      "position_angle": 60,
       "pull_up": true,
       "debounce_ms": 50,
       "normally_open": true,
-      "stop_on_trigger": true
+      "stop_on_trigger": true,
+      "description": "Rotor endstop (primary)"
+    },
+    "endstop2": {
+      "pin": 25,
+      "position_angle": 0,
+      "pull_up": true,
+      "debounce_ms": 50,
+      "normally_open": true,
+      "stop_on_trigger": true,
+      "description": "Turntable/secondary endstop"
+    },
+    "rotor_endstop": {
+      "pin": 27,
+      "position_angle": 60,
+      "pull_up": true,
+      "debounce_ms": 50,
+      "normally_open": true,
+      "stop_on_trigger": true,
+      "description": "Rotor endstop (from rotor_endstop setting)"
+    },
+    "extra_endstop": {
+      "pin": 26,
+      "position_angle": 0,
+      "pull_up": true,
+      "debounce_ms": 50,
+      "normally_open": true,
+      "stop_on_trigger": true,
+      "description": "Extra motor endstop"
     }
   },
 
   "camera": {
-    "type": "Arducam IMX519",
-    "interface": "USB 3.0",
-    "resolution": "4656x3496",
-    "sensor_size_mm": [7.9, 5.3],
-    "pixel_size_um": 1.7,
-    "lens": "Standard 50mm",
+    "type": "UC-873 Rev.D",
+    "interface": "USB",
+    "notes": "NOT Arducam IMX519. UC-873 Rev.D detected by VS Code agent. Check v4l2-ctl for exact capabilities.",
+    "resolution": "TBD",
+    "sensor_size_mm": [0, 0],
+    "pixel_size_um": 0,
+    "lens": "Unknown",
     "autofocus": {
       "enabled": true,
       "method": "v4l2-ctl",
-      "focus_range": [0, 1000],
-      "default_focus": 500
+      "focus_range": [0, 1023],
+      "default_focus": 2838,
+      "note": "Focus default from original firmware settings: cam_focus=2838"
     },
     "capture_settings": {
-      "exposure_mode": "auto",
-      "white_balance_mode": "auto",
-      "ISO_range": [100, 3200],
-      "shutter_speed_ms": "auto",
-      "jpeg_quality": 90
+      "shutter_speed_us": 50000,
+      "saturation": 1,
+      "contrast": 1,
+      "awbg_red": 0,
+      "awbg_blue": 0,
+      "gain": 1,
+      "jpeg_quality": 95,
+      "timeout_ms": 800,
+      "cam_rotation": 0,
+      "autofocus_enabled": true
+    },
+    "known_cameras": {
+      "imx519": [4656, 3496],
+      "imx219": [3280, 2464],
+      "imx477": [4056, 3040],
+      "ov5647": [2592, 1944],
+      "imx378": [3840, 2880],
+      "ov9271": [1280, 800],
+      "imx290a": [1920, 1080],
+      "imx290b": [1920, 1080]
     }
   },
 
   "ringlight": {
-    "type": "12V LED Ringlight",
-    "power": "2000 mA @ 12V",
-    "control": "PWM via GPIO",
+    "type": "LED Ringlight (serienmäßig)",
+    "power": "3.3V GPIO driven (onboard)",
+    "control": "GPIO ON/OFF",
     "channels": [
       {
         "id": 1,
-        "gpio_pin": 26,
+        "gpio_pin": 17,
         "pwm_capable": true,
         "pwm_frequency_hz": 1000,
-        "circuit": "GPIO → MOSFET Gate → 12V Supply",
-        "components": [
-          "1× MOSFET (2N7000 or IRF520N)",
-          "1× 1kΩ Resistor (gate protection)",
-          "1× 1N4007 Diode (back-EMF protection)"
-        ],
+        "circuit": "Direct GPIO (onboard ringlight)",
+        "description": "Serienmäßiges Ringlight um die Kamera",
         "control_range": [0, 255],
         "brightness_mapping": "linear"
       },
       {
         "id": 2,
-        "gpio_pin": 19,
+        "gpio_pin": 27,
         "pwm_capable": true,
         "pwm_frequency_hz": 1000,
-        "circuit": "GPIO → MOSFET Gate → 12V Supply",
-        "components": [
-          "1× MOSFET (2N7000 or IRF520N)",
-          "1× 1kΩ Resistor (gate protection)",
-          "1× 1N4007 Diode (back-EMF protection)"
-        ],
+        "circuit": "Direct GPIO (onboard ringlight 2)",
+        "description": "Zweites serienmäßiges Ringlight",
         "control_range": [0, 255],
         "brightness_mapping": "linear"
       }
     ],
-    "connector": "JST XH",
+    "connector": "Direct PCB",
     "safety": {
-      "max_brightness_default": 200,
-      "thermal_cutoff_celsius": 60,
+      "max_brightness_default": 255,
+      "thermal_cutoff_celsius": 70,
       "cooldown_seconds": 30
     }
   },
 
-  "gpio_pins": {
-    "motors": {
-      "rotor_step": 27,
-      "rotor_dir": 17,
-      "turntable_step": 16,
-      "turntable_dir": 6,
-      "motor_enable": 22
-    },
-    "endstops": {
-      "rotor_endstop": 18
-    },
-    "ringlight": {
-      "ringlight_ch1": 26,
-      "ringlight_ch2": 19
-    },
-    "reserved": [
-      2,
-      3,
-      4,
-      5,
-      14,
-      15,
-      23,
-      24,
-      25
-    ],
-    "available": [
-      7,
-      8,
-      9,
-      10,
-      11,
-      12,
-      13,
-      20,
-      21
+  "external_ringlight": {
+    "type": "12V LED Ringlight (zusätzlich)",
+    "power": "12V, 2000mA",
+    "control": "PWM via MOSFET",
+    "note": "Noch nicht verdrahtet. Freie GPIOs verfügbar: 7, 8, 12, 13, 16, 18, 25 (prüfen!)",
+    "suggested_pin": 13,
+    "channels": [
+      {
+        "id": 3,
+        "gpio_pin": 13,
+        "pwm_capable": true,
+        "pwm_frequency_hz": 1000,
+        "circuit": "GPIO → MOSFET Gate → 12V Supply → Ringlight",
+        "components": [
+          "1× MOSFET (2N7000 oder IRF520N)",
+          "1× 1kΩ Widerstand",
+          "1× 1N4007 Schutzdiode"
+        ],
+        "control_range": [0, 255],
+        "brightness_mapping": "linear"
+      }
     ]
   },
 
+  "gpio_pins": {
+    "motors": {
+      "rotor_step": 6,
+      "rotor_dir": 5,
+      "rotor_enable": 23,
+      "turntable_step": 11,
+      "turntable_dir": 9,
+      "turntable_enable": 22,
+      "extra_step": 20,
+      "extra_dir": 21,
+      "extra_enable": 19
+    },
+    "endstops": {
+      "endstop1": 24,
+      "endstop2": 25,
+      "rotor_endstop": 27,
+      "extra_endstop": 26
+    },
+    "ringlight": {
+      "ringlight1": 17,
+      "ringlight2": 27,
+      "external_ringlight": 13
+    },
+    "other": {
+      "pin_external": 10
+    },
+    "available_for_custom": [7, 8, 12, 13, 16, 18],
+    "note": "GPIO 27 is shared: ringlight2 AND rotor_endstop in original firmware — needs clarification!"
+  },
+
   "interfaces": {
-    "i2c": {
-      "enabled": false,
-      "sda_pin": 2,
-      "scl_pin": 3
-    },
-    "spi": {
-      "enabled": false,
-      "miso_pin": 9,
-      "mosi_pin": 10,
-      "clk_pin": 11
-    },
-    "uart": {
-      "enabled": false,
-      "tx_pin": 14,
-      "rx_pin": 15
-    }
+    "i2c": { "enabled": false, "sda_pin": 2, "scl_pin": 3 },
+    "spi": { "enabled": false },
+    "uart": { "enabled": false }
+  },
+
+  "scan_defaults": {
+    "photo_count": 50,
+    "rotor_angle_step": 10,
+    "turntable_angle_step": 10,
+    "rotor_angle_min": -20,
+    "rotor_angle_max": 60,
+    "rotor_angle_start": 0,
+    "second_pass": true,
+    "turntable_mode": false,
+    "ringlight_timeout_sec": 300
   },
 
   "performance": {
     "scan_time_per_position_sec": 2.0,
-    "scan_positions_typical": 100,
-    "total_scan_time_min": 3.5,
+    "scan_positions_typical": 50,
+    "total_scan_time_min": 2.0,
     "image_preview_fps": 15,
-    "ringlight_warmup_sec": 2,
+    "ringlight_warmup_sec": 0,
     "motor_acceleration_sec": 0.5
   },
 
@@ -190,12 +257,22 @@
     "python_version": "3.11+",
     "key_libraries": [
       "gpiozero>=2.0",
-      "picamera2",
-      "opencv-python>=4.8",
-      "numpy",
       "fastapi",
       "uvicorn",
-      "aiofiles"
+      "opencv-python",
+      "numpy"
+    ]
+  },
+
+  "audit": {
+    "source": "Original OpenScan2 firmware image: 2024-09-09-OpenScan.zip",
+    "method": "ext4 direct read via Python",
+    "date": "2026-06-12",
+    "warnings": [
+      "GPIO 27 appears as BOTH ringlight2 AND rotor_endstop — verify physically!",
+      "Camera UC-873 Rev.D — NOT Arducam IMX519 — camera code needs adaptation",
+      "rotor steps/rotation = 48000 (much higher than assumed 10240)",
+      "turntable steps/rotation = 3200 (was 800 in wrong config)"
     ]
   }
 }
