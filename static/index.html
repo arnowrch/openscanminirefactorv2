@@ -37,15 +37,12 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
 /* ── LAYOUT ── */
-/* Controls left (scrollable), portrait camera column right */
-.grid{display:grid;grid-template-columns:1fr 300px;min-height:calc(100vh - 52px);position:relative;z-index:1}
-@media(max-width:700px){.grid{grid-template-columns:1fr}}
+.grid{display:grid;grid-template-columns:1fr 380px;min-height:calc(100vh - 52px);position:relative;z-index:1}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
 
 /* ── CAMERA PANEL ── */
-/* Sits on the right as a sticky portrait column */
-.cam-panel{display:flex;flex-direction:column;border-left:1px solid var(--border);order:2;position:sticky;top:52px;height:calc(100vh - 52px)}
-.ctrl{order:1}
-.preview-wrap{position:relative;background:#000;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.cam-panel{display:flex;flex-direction:column;border-right:1px solid var(--border)}
+.preview-wrap{position:relative;background:#000;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center;max-height:50vh}
 .preview-img{width:100%;height:100%;object-fit:contain;transition:opacity .25s ease;display:block}
 .ph{display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--muted)}
 
@@ -64,8 +61,8 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 @keyframes loadslide{0%{left:0;right:100%}50%{left:0;right:0}100%{left:100%;right:0}}
 
 /* Camera settings bar */
-.cam-bar{padding:12px 14px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:10px}
-.cam-bar-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cam-bar{padding:14px 18px;border-top:1px solid var(--border);background:var(--surface);display:grid;grid-template-columns:1fr 1fr auto auto;gap:14px;align-items:end}
+@media(max-width:600px){.cam-bar{grid-template-columns:1fr 1fr}}
 
 /* ── CONTROLS PANEL ── */
 .ctrl{display:flex;flex-direction:column;background:var(--surface);overflow-y:auto;max-height:calc(100vh - 52px)}
@@ -255,21 +252,24 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
         <span class="rval" x-text="camShutterMs+'ms'"></span>
       </div>
     </div>
-    <div class="cam-bar-row">
-      <button class="btn" :class="camAF?'btn-p':'btn-g'" style="font-size:10px;padding:5px 9px;flex:1" @click="toggleAF()">
-        <span x-text="camAF?'AF ●':'AF ○'"></span>
-      </button>
-      <button class="btn btn-g" style="font-size:10px;padding:5px 9px" @click="xhair=!xhair" title="Crosshair">┼</button>
-      <button class="btn btn-p" @click="capturePhoto()" :disabled="!camOk||capturing" style="font-size:10px;padding:5px 9px;flex:1">
-        <span x-text="capturing?'…':'⊙ Cap'"></span>
-      </button>
+    <div class="fg">
+      <label class="lbl">Options</label>
+      <div class="flex g2" style="margin-top:3px">
+        <button class="btn" :class="camAF?'btn-p':'btn-g'" style="font-size:10px;padding:5px 9px" @click="toggleAF()">
+          <span x-text="camAF?'AF ●':'AF ○'"></span>
+        </button>
+        <button class="btn btn-g" style="font-size:10px;padding:5px 9px" @click="xhair=!xhair" title="Toggle crosshair">┼</button>
+      </div>
+      <div class="flex g2" style="margin-top:6px">
+        <template x-for="r in [-90,0,90,180]">
+          <button class="btn" :class="previewRot===r?'btn-p':'btn-g'" style="font-size:9px;padding:4px 7px;min-width:36px" @click="previewRot=r" x-text="r+'°'"></button>
+        </template>
+      </div>
     </div>
-    <div class="cam-bar-row">
-      <span class="lbl" style="white-space:nowrap">Rotate</span>
-      <template x-for="r in [-90,0,90,180]">
-        <button class="btn" :class="previewRot===r?'btn-p':'btn-g'" style="font-size:9px;padding:4px 0;flex:1" @click="previewRot=r" x-text="r+'°'"></button>
-      </template>
-    </div>
+    <button class="btn btn-p" @click="capturePhoto()" :disabled="!camOk||capturing" style="height:fit-content;align-self:end">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="3" fill="currentColor"/><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.5"/></svg>
+      <span x-text="capturing?'…':'Capture'"></span>
+    </button>
   </div>
 </section>
 
