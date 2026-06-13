@@ -35,19 +35,25 @@ echo "=== 4b. Optional: opencv for focus stacking ==="
 pip install --quiet opencv-python-headless || echo "opencv skipped (ok)"
 
 echo ""
-echo "=== 5. Restart server (hard singleton) ==="
-# Hard-kill ALL uvicorn instances to avoid the double-process 500-error window
-pids=$(pgrep -f "python.*uvicorn|uvicorn.*openscan_mini" 2>/dev/null) || true
+echo "=== 5. Restart server (safe singleton) ==="
+# Graceful stop first, hard-kill only if still running after 3s
+pids=$(pgrep -f "uvicorn.*openscan_mini" 2>/dev/null || true)
 if [[ -n "$pids" ]]; then
-  echo "Killing PIDs: $pids"
-  echo "$pids" | xargs -r kill -9
-  sleep 1
+  echo "Stopping PIDs: $pids"
+  kill $pids 2>/dev/null || true
+  for i in $(seq 1 5); do
+    sleep 1
+    pids_left=$(pgrep -f "uvicorn.*openscan_mini" 2>/dev/null || true)
+    [[ -z "$pids_left" ]] && break
+    [[ "$i" -eq 5 ]] && kill -9 $pids_left 2>/dev/null || true
+  done
 fi
-echo "Processes after kill: $(pgrep -af 'uvicorn' || echo 'none')"
 
-nohup python -m uvicorn openscan_mini.main:app \
+# Use setsid so the process survives SSH session end
+setsid python -m uvicorn openscan_mini.main:app \
   --host 0.0.0.0 --port 8000 \
   >> ~/openscan-server.log 2>&1 &
+disown
 
 echo "Waiting for health check..."
 for i in {1..30}; do
