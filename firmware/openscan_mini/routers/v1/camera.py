@@ -31,7 +31,7 @@ def set_camera_controller(controller) -> None:
 
 def _get():
     if not CAMERA:
-        raise HTTPException(status_code=500, detail="Camera controller not initialized")
+        raise HTTPException(status_code=503, detail="Camera not ready — server still starting up")
     return CAMERA
 
 

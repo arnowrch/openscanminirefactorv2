@@ -729,7 +729,7 @@ function app(){return{
   },
 
   /* ─ camera ─ */
-  async fetchCam(){
+  async fetchCam(retries=4){
     try{const r=await fetch(`${this.api}/hardware/camera/settings`);
       if(r.ok){const d=await r.json();
         this.camOk=true;
@@ -740,17 +740,22 @@ function app(){return{
         this.camQuality=d.jpeg_quality??95;
         this.camSat=d.saturation??1.0;
         this.camContrast=d.contrast??1.0;
-      }else{
-        // fallback to status endpoint
-        const r2=await fetch(`${this.api}/hardware/camera/`);
-        if(r2.ok){const d=await r2.json();
-          this.camOk=d.available;
-          this.camAF=d.settings?.autofocus??true;
-          this.camFocus=d.settings?.lens_position??0;
-          this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
-        }
+        return;
       }
-    }catch(e){}
+      // 503 = server starting up, retry
+      if((r.status===503||r.status===500)&&retries>0){
+        setTimeout(()=>this.fetchCam(retries-1),1500);
+        return;
+      }
+      // fallback to status endpoint for older firmware
+      const r2=await fetch(`${this.api}/hardware/camera/`);
+      if(r2.ok){const d=await r2.json();
+        this.camOk=d.available;
+        this.camAF=d.settings?.autofocus??true;
+        this.camFocus=d.settings?.lens_position??0;
+        this.camShutterMs=Math.round((d.settings?.shutter_us??50000)/1000);
+      }
+    }catch(e){if(retries>0)setTimeout(()=>this.fetchCam(retries-1),2000);}
   },
   async saveCamSettings(){
     try{
