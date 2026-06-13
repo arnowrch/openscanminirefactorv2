@@ -389,6 +389,8 @@ async def scan_websocket(websocket: WebSocket):
         status = await get_scan_status()
         await websocket.send_text(json.dumps(status))
 
+        _last_sent_state: Optional[str] = None
+
         while True:
             try:
                 msg = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
@@ -413,18 +415,21 @@ async def scan_websocket(websocket: WebSocket):
                             await websocket.send_text(json.dumps(payload))
                         except Exception:
                             break
+                        _last_sent_state = task.status
                     elif task and task.status in (
                         TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.ERROR
                     ):
-                        # Send final state once
-                        try:
-                            await websocket.send_text(json.dumps({
-                                "state": task.status,
-                                "task_id": task.id,
-                                "error": task.error,
-                            }))
-                        except Exception:
-                            pass
+                        # Send terminal state only once — prevents toast spam on error
+                        if _last_sent_state != task.status:
+                            try:
+                                await websocket.send_text(json.dumps({
+                                    "state": task.status,
+                                    "task_id": task.id,
+                                    "error": task.error,
+                                }))
+                            except Exception:
+                                pass
+                            _last_sent_state = task.status
 
     except WebSocketDisconnect:
         pass
