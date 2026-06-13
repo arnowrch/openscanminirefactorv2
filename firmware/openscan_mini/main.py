@@ -29,6 +29,8 @@ from openscan_mini.routers.v1.tasks import router as tasks_router
 from openscan_mini.routers.v1.scan_path import router as scan_path_router, set_motor_config
 from openscan_mini.services.task_manager import get_task_manager
 from openscan_mini.services.project_manager import get_project_manager
+from openscan_mini.services.settings_store import SettingsStore
+from openscan_mini.models.camera_settings_persist import CameraSettingsPersist
 
 
 # Configure logging
@@ -119,23 +121,20 @@ async def lifespan(app: FastAPI):
     try:
         cam_cfg = HARDWARE_CONFIG.camera.capture_settings
 
-        # Load persisted settings (override with hardware defaults if no save file)
-        from pydantic import BaseModel
-        from openscan_mini.services.settings_store import SettingsStore
-
-        class _CamPersist(BaseModel):
-            shutter_us: int = cam_cfg.get("shutter_speed_us", 50000)
-            gain: float = float(cam_cfg.get("gain", 1.0))
-            jpeg_quality: int = cam_cfg.get("jpeg_quality", 95)
-            saturation: float = float(cam_cfg.get("saturation", 1.0))
-            contrast: float = float(cam_cfg.get("contrast", 1.0))
-            autofocus: bool = cam_cfg.get("autofocus_enabled", True)
-            lens_position: float = 0.0
-            width: int = 4656
-            height: int = 3496
-
+        # Merge hardware config defaults into persist model, then load saved overrides
+        hw_defaults = CameraSettingsPersist(
+            shutter_us=cam_cfg.get("shutter_speed_us", 50000),
+            gain=float(cam_cfg.get("gain", 1.0)),
+            jpeg_quality=cam_cfg.get("jpeg_quality", 95),
+            saturation=float(cam_cfg.get("saturation", 1.0)),
+            contrast=float(cam_cfg.get("contrast", 1.0)),
+            autofocus=cam_cfg.get("autofocus_enabled", True),
+        )
         settings_path = Path.home() / ".openscan" / "settings" / "camera.json"
-        cam_store = SettingsStore(_CamPersist, settings_path)
+        cam_store = SettingsStore(CameraSettingsPersist, settings_path)
+        # If no saved file exists, seed it with hardware defaults
+        if not settings_path.exists():
+            cam_store.save(hw_defaults)
         persisted = cam_store.load()
 
         cam_settings = CameraSettings(
