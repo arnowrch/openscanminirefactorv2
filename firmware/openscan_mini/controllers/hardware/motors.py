@@ -75,8 +75,12 @@ class MotorController:
     # Public API
     # ------------------------------------------------------------------
 
-    async def move_to(self, target_angle: float) -> MotorStatus:
-        """Move to absolute angle (degrees). Clamps to [min_angle, max_angle]."""
+    async def move_to(self, target_angle: float, check_endstop: bool = False) -> MotorStatus:
+        """Move to absolute angle (degrees). Clamps to [min_angle, max_angle].
+
+        check_endstop=False (default): endstop is ignored during move/jog.
+        check_endstop=True: used only by home() — stops on endstop trigger.
+        """
         target_angle = max(self.config.min_angle, min(self.config.max_angle, target_angle))
 
         delta = target_angle - self.current_angle
@@ -86,12 +90,12 @@ class MotorController:
             return self.get_status()
 
         direction = 1 if delta > 0 else -1
-        await self._execute(steps, direction, target_angle)
+        await self._execute(steps, direction, target_angle, check_endstop=check_endstop)
         return self.get_status()
 
     async def move_by(self, degrees: float) -> MotorStatus:
-        """Move relative by degrees."""
-        return await self.move_to(self.current_angle + degrees)
+        """Move relative by degrees. Endstop not checked (jog use-case)."""
+        return await self.move_to(self.current_angle + degrees, check_endstop=False)
 
     def stop(self) -> None:
         self._stop_requested = True
@@ -225,7 +229,8 @@ class MotorController:
 
         return times
 
-    async def _execute(self, steps: int, direction: int, target_angle: float) -> None:
+    async def _execute(self, steps: int, direction: int, target_angle: float,
+                       check_endstop: bool = False) -> None:
         self.is_moving = True
         self._stop_requested = False
         angle_per_step = 360.0 / self.config.steps_per_rotation * direction
@@ -239,7 +244,9 @@ class MotorController:
         loop = asyncio.get_event_loop()
 
         try:
-            await loop.run_in_executor(_executor, self._run_steps, step_times, angle_per_step)
+            await loop.run_in_executor(
+                _executor, self._run_steps, step_times, angle_per_step, check_endstop
+            )
         finally:
             self.is_moving = False
             # Snap to exact target to avoid float drift
@@ -247,7 +254,8 @@ class MotorController:
             # Disable motor (saves power, reduces heat)
             gpio.set_output_pin(self.config.enable_pin, True)
 
-    def _run_steps(self, step_times: List[float], angle_per_step: float) -> None:
+    def _run_steps(self, step_times: List[float], angle_per_step: float,
+                   check_endstop: bool = False) -> None:
         """Blocking step execution — runs in ThreadPoolExecutor."""
         import time
 
@@ -260,8 +268,8 @@ class MotorController:
             if self._stop_requested:
                 break
 
-            # Check endstop every step
-            if endstop_pin and gpio.is_button_pressed(endstop_pin):
+            # Only check endstop during homing — always-triggered pins block all jog otherwise
+            if check_endstop and endstop_pin and gpio.is_button_pressed(endstop_pin):
                 logger.info(f"{self.motor_id}: endstop hit at {self.current_angle:.1f}°")
                 self._endstop_hit = True
                 break
