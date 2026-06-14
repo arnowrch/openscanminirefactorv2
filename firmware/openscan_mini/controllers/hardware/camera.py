@@ -164,6 +164,7 @@ class CameraController:
         self._busy = False
         self._lock = threading.Lock()
         self._store = None
+        self._last_preview_jpeg: Optional[bytes] = None  # served during AF/capture busy
 
         if _PICAM2_AVAILABLE:
             self._init_picamera2()
@@ -335,6 +336,9 @@ class CameraController:
                 return b"", None
 
         if self._busy:
+            # Return last cached frame so browser doesn't freeze during AF/capture
+            if self._last_preview_jpeg:
+                return self._last_preview_jpeg, None
             return b"", None
 
         try:
@@ -354,8 +358,10 @@ class CameraController:
             img = img.resize((_STREAM_WIDTH, _STREAM_HEIGHT), Image.BILINEAR)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=72)
+            jpeg = buf.getvalue()
+            self._last_preview_jpeg = jpeg  # cache for busy periods
             rgb = np.array(img)
-            return buf.getvalue(), rgb
+            return jpeg, rgb
         except Exception as e:
             logger.debug(f"Stream frame error: {e}")
             return b"", None
@@ -511,11 +517,15 @@ class CameraController:
         af_shutter = self._ensure_good_exposure_for_af()
         time.sleep(0.15)  # let sensor settle
 
-        best_pos = _VCM_SWEEP_START
+        best_pos = _VCM_SWEEP_END
         best_sharp = -1.0
 
-        # ── Pass 1: coarse sweep across full VCM range ───────────────────────
-        for pos in range(_VCM_SWEEP_START, _VCM_SWEEP_END + 1, _VCM_SWEEP_STEP):
+        # ── Pass 1: coarse sweep MACRO→INFINITY (foreground-first) ──────────
+        # Sweeping from high VCM (close) to low VCM (infinity) means we hit the
+        # foreground object BEFORE the background. Early-exit on peak-then-drop
+        # prevents locking onto distant background texture.
+        declining = 0
+        for pos in range(_VCM_SWEEP_END, _VCM_SWEEP_START - 1, -_VCM_SWEEP_STEP):
             _vcm_set(pos)
             time.sleep(0.15)  # VCM settle
             try:
@@ -526,6 +536,13 @@ class CameraController:
             if s > best_sharp:
                 best_sharp = s
                 best_pos = pos
+                declining = 0
+            elif best_sharp >= _AF_SHARP_THRESHOLD and s < best_sharp * 0.7:
+                # Sharpness dropped >30% after a good peak → foreground found
+                declining += 1
+                if declining >= 2:
+                    logger.info(f"AF early exit at pos={pos}: peak {best_sharp:.1f} at {best_pos}")
+                    break
 
         # ── Pass 2: fine sweep ±150 around coarse best, step 15 ─────────────
         for pos in range(max(_VCM_MIN, best_pos - 150), min(_VCM_MAX, best_pos + 151), _VCM_FINE_STEP):

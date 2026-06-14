@@ -51,7 +51,11 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .xhair::before,.xhair::after{content:'';position:absolute;background:rgba(172,156,141,.45)}
 .xhair::before{left:50%;top:8%;bottom:8%;width:1px;transform:translateX(-50%)}
 .xhair::after{top:50%;left:8%;right:8%;height:1px;transform:translateY(-50%)}
-.xhair-dot{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border:1.5px solid var(--accent);border-radius:50%}
+.xhair-dot{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border:1.5px solid var(--accent);border-radius:50%;transition:border-color .3s,box-shadow .3s}
+.xhair-af-run{border-color:#facc15;box-shadow:0 0 0 4px rgba(250,204,21,.25);animation:af-pulse 0.7s ease-in-out infinite}
+.xhair-af-lock{border-color:#4ade80;box-shadow:0 0 0 6px rgba(74,222,128,.2);animation:af-lock 1.8s ease-out forwards}
+@keyframes af-pulse{0%,100%{box-shadow:0 0 0 3px rgba(250,204,21,.2)}50%{box-shadow:0 0 0 8px rgba(250,204,21,.35)}}
+@keyframes af-lock{0%{box-shadow:0 0 0 10px rgba(74,222,128,.4)}100%{box-shadow:0 0 0 3px rgba(74,222,128,.0)}}
 .corner{position:absolute;width:18px;height:18px;border-color:rgba(172,156,141,.38);border-style:solid}
 .tl{top:14px;left:14px;border-width:2px 0 0 2px}.tr{top:14px;right:14px;border-width:2px 2px 0 0}
 .bl{bottom:14px;left:14px;border-width:0 0 2px 2px}.br{bottom:14px;right:14px;border-width:0 2px 2px 0}
@@ -255,8 +259,14 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
       <span class="xs" x-text="'Camera unavailable'"></span>
     </div>
 
-    <!-- Crosshair -->
-    <div class="xhair" x-show="xhair && camOk"><div class="xhair-dot"></div></div>
+    <!-- Crosshair + AF indicators -->
+    <div class="xhair" x-show="xhair && camOk">
+      <div class="xhair-dot" :class="afTriggering?'xhair-af-run':afLocked?'xhair-af-lock':''"></div>
+    </div>
+    <!-- AF running overlay -->
+    <div x-show="afTriggering" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+      <div style="background:rgba(0,0,0,.55);color:var(--accent-b);font-family:var(--mono);font-size:11px;font-weight:700;padding:5px 12px;border-radius:6px;letter-spacing:.08em;border:1px solid var(--accent-b)">AF SWEEP…</div>
+    </div>
     <template x-if="camOk">
       <div><div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div></div>
     </template>
@@ -672,7 +682,7 @@ function app(){return{
 
   // camera
   xhair:true, camOk:false, capturing:false,
-  camFocus:0, camShutterMs:50, camAF:true, previewRot:-90,
+  camFocus:0, camShutterMs:50, camAF:true, previewRot:-90, afLocked:false,
   camGain:1.0, camQuality:95, camSat:1.0, camContrast:1.0,
   camW:4656, camH:3496, camAperture:2.0, previewRes:'1280×960',
   afTriggering:false,
@@ -800,18 +810,20 @@ function app(){return{
   },
   async setExposure(us){try{await fetch(`${this.api}/hardware/camera/exposure`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shutter_us:Math.round(us)})})}catch(e){}},
   async toggleAF(){
-    // AF button = always one-shot trigger. After sweep, slider shows found position (locked).
+    // Always one-shot: sweep macro→infinity, lock at found position, slider updates.
     this.afTriggering=true;
+    this.afLocked=false;
     try{
       const r=await fetch(`${this.api}/hardware/camera/autofocus/trigger`,{method:'POST'});
       if(r.ok){
         const d=await r.json();
-        // lens_position in response is raw VCM (0-4095); convert to diopters for slider
         if(d.lens_position!=null){
           this.camFocus=Math.round(d.lens_position/150*10)/10;
         }
+        this.afLocked=true;
+        setTimeout(()=>{ this.afLocked=false; },2000);
       }
-      this.camAF=false;  // lock at found position so slider shows result
+      this.camAF=false;
     }catch(e){this.toast('AF failed: '+e.message,'error');}
     finally{this.afTriggering=false;}
   },
