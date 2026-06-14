@@ -37,11 +37,12 @@ logger = logging.getLogger(__name__)
 _VCM_DEV = "/dev/v4l-subdev1"
 _VCM_MIN = 0
 _VCM_MAX = 4095
-# Practical macro range: 0=infinity, ~300=50cm, ~600=20cm, ~900=10cm
+# IMX519 VCM practical range: 0=infinity, ~300=50cm, ~900=10cm, ~2000=4cm (macro)
+# Full sweep must cover 0–2500 to catch close-focus macro range.
 _VCM_SWEEP_START = 50
-_VCM_SWEEP_END   = 950
-_VCM_SWEEP_STEP  = 50   # coarse pass
-_VCM_FINE_STEP   = 10   # fine pass ±60 around best
+_VCM_SWEEP_END   = 2500
+_VCM_SWEEP_STEP  = 100  # coarse pass — 25 steps across full range
+_VCM_FINE_STEP   = 15   # fine pass ±150 around best
 
 
 def _vcm_set(pos: int) -> bool:
@@ -59,8 +60,8 @@ def _vcm_set(pos: int) -> bool:
 
 def _vcm_diopters_to_raw(diopters: float) -> int:
     """Convert diopter lens position to VCM raw value. Linear approximation."""
-    # 0d = infinity (VCM=0), 12d ≈ 8cm (VCM≈900)
-    return int(max(0.0, diopters) * 75)
+    # 0d = infinity (VCM=0), ~15d = close macro (VCM≈2000). Multiplier 150.
+    return int(max(0.0, diopters) * 150)
 
 
 def _measure_sharpness(array) -> float:
@@ -69,9 +70,11 @@ def _measure_sharpness(array) -> float:
     if array is None or array.size == 0:
         return 0.0
     h, w = array.shape[:2]
-    # Central 40% crop — focus on the object, ignore background
-    y0, y1 = h // 3, 2 * h // 3
-    x0, x1 = w // 3, 2 * w // 3
+    # Central 20% crop — matches crosshair area, ignores background
+    cy, cx = h // 2, w // 2
+    dh, dw = h // 10, w // 10
+    y0, y1 = cy - dh, cy + dh
+    x0, x1 = cx - dw, cx + dw
     crop = array[y0:y1, x0:x1]
     if crop.ndim == 3:
         gray = (crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114).astype("float32")
@@ -454,8 +457,8 @@ class CameraController:
                 best_sharp = s
                 best_pos = pos
 
-        # Fine sweep ±60 around coarse best
-        for pos in range(max(_VCM_MIN, best_pos - 60), min(_VCM_MAX, best_pos + 61), _VCM_FINE_STEP):
+        # Fine sweep ±150 around coarse best (covers one full coarse step on each side)
+        for pos in range(max(_VCM_MIN, best_pos - 150), min(_VCM_MAX, best_pos + 151), _VCM_FINE_STEP):
             _vcm_set(pos)
             time.sleep(0.10)
             try:
@@ -471,7 +474,7 @@ class CameraController:
         _vcm_set(best_pos)
         logger.info(f"AF sweep done: best_pos={best_pos} sharpness={best_sharp:.1f}")
         # Store approximate diopter equivalent
-        self.settings.lens_position = best_pos / 75.0
+        self.settings.lens_position = best_pos / 150.0
         return best_pos
 
     def set_exposure(self, shutter_us: int, gain: Optional[float] = None) -> None:
