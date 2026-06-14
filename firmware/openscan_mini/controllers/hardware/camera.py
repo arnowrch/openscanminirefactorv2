@@ -64,18 +64,21 @@ def _vcm_diopters_to_raw(diopters: float) -> int:
     return int(max(0.0, diopters) * 150)
 
 
-def _measure_sharpness(array) -> float:
+def _measure_sharpness(array, cy_frac: float = 0.5, cx_frac: float = 0.5) -> float:
     """
-    Laplacian variance on the centre 20% crop (crosshair zone).
-    Uses cv2 when available — same algorithm as analysis.py so the
-    AF threshold and the Blur indicator are directly comparable.
+    Laplacian variance on a 20% crop centred at (cy_frac, cx_frac).
+    Defaults to frame centre. Pass object-box centre to track the actual subject.
+    Uses cv2 when available — same algorithm as analysis.py.
     """
     import numpy as np
     if array is None or array.size == 0:
         return 0.0
     h, w = array.shape[:2]
-    cy, cx = h // 2, w // 2
-    dh, dw = h // 10, w // 10
+    cy = int(h * cy_frac)
+    cx = int(w * cx_frac)
+    dh, dw = max(1, h // 10), max(1, w // 10)
+    cy = max(dh, min(h - dh, cy))
+    cx = max(dw, min(w - dw, cx))
     crop = array[cy - dh : cy + dh, cx - dw : cx + dw]
     if crop.ndim == 3:
         gray = (crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114).astype("float32")
@@ -517,6 +520,28 @@ class CameraController:
         af_shutter = self._ensure_good_exposure_for_af()
         time.sleep(0.15)  # let sensor settle
 
+        # ── Step 2: Detect object position → use its centre as AF zone ───────
+        # If analysis finds an object bounding box, measure sharpness there.
+        # Avoids metering on background when object is off-centre (common on turntable).
+        af_cy_frac = 0.5
+        af_cx_frac = 0.5
+        try:
+            ref_frame = self._grab_rgb()
+            from openscan_mini.controllers.hardware.analysis import _detect_object_box, _to_gray, _resize, _ANALYSIS_SIZE
+            small = _resize(ref_frame, _ANALYSIS_SIZE)
+            gray_small = _to_gray(small)
+            box = _detect_object_box(gray_small, ref_frame.shape)
+            if box:
+                rx, ry, rw, rh = box
+                oh, ow = ref_frame.shape[:2]
+                af_cy_frac = (ry + rh / 2) / oh
+                af_cx_frac = (rx + rw / 2) / ow
+                logger.info(f"AF zone: object detected at ({af_cx_frac:.2f}, {af_cy_frac:.2f}) — using object centre")
+            else:
+                logger.info("AF zone: no object detected — using frame centre")
+        except Exception as e:
+            logger.warning(f"AF object detection failed, using centre: {e}")
+
         best_pos = _VCM_SWEEP_END
         best_sharp = -1.0
 
@@ -529,7 +554,7 @@ class CameraController:
             _vcm_set(pos)
             time.sleep(0.15)  # VCM settle
             try:
-                s = _measure_sharpness(self._grab_rgb())
+                s = _measure_sharpness(self._grab_rgb(), af_cy_frac, af_cx_frac)
             except Exception:
                 s = 0.0
             logger.debug(f"AF coarse pos={pos} sharpness={s:.1f}")
@@ -538,7 +563,6 @@ class CameraController:
                 best_pos = pos
                 declining = 0
             elif best_sharp >= _AF_SHARP_THRESHOLD and s < best_sharp * 0.7:
-                # Sharpness dropped >30% after a good peak → foreground found
                 declining += 1
                 if declining >= 2:
                     logger.info(f"AF early exit at pos={pos}: peak {best_sharp:.1f} at {best_pos}")
@@ -549,7 +573,7 @@ class CameraController:
             _vcm_set(pos)
             time.sleep(0.12)
             try:
-                s = _measure_sharpness(self._grab_rgb())
+                s = _measure_sharpness(self._grab_rgb(), af_cy_frac, af_cx_frac)
             except Exception:
                 s = 0.0
             if s > best_sharp:
@@ -557,7 +581,6 @@ class CameraController:
                 best_pos = pos
 
         # ── Pass 3: ultra-fine closed-loop — only if still below threshold ───
-        # Repeats up to 2× with step=5 to squeeze out the last precision.
         for _attempt in range(2):
             if best_sharp >= _AF_SHARP_THRESHOLD:
                 break
@@ -566,7 +589,7 @@ class CameraController:
                 _vcm_set(pos)
                 time.sleep(0.12)
                 try:
-                    s = _measure_sharpness(self._grab_rgb())
+                    s = _measure_sharpness(self._grab_rgb(), af_cy_frac, af_cx_frac)
                 except Exception:
                     s = 0.0
                 if s > best_sharp:
