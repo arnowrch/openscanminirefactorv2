@@ -413,7 +413,7 @@ class CameraController:
             # Step 1+2: OS3 sequence — Auto mode first, THEN cycle
             self._set_focus_mode("photo")
             try:
-                success = self._picam.autofocus_cycle(timeout=8)
+                success = self._picam.autofocus_cycle()
                 logger.info(f"AF cycle result: {'focused' if success else 'timeout/failed'}")
             except Exception as e:
                 logger.warning(f"AF cycle error ({e}) — capturing with current focus")

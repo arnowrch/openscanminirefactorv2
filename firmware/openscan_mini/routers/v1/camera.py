@@ -213,7 +213,7 @@ def _af_trigger_sync(cam):
     """
     cam._set_focus_mode("photo")
     try:
-        success = cam._picam.autofocus_cycle(timeout=8)
+        success = cam._picam.autofocus_cycle()
         logger.info(f"AF trigger: {'focused' if success else 'timeout/failed'}")
     except Exception as e:
         logger.warning(f"AF trigger error: {e}")
