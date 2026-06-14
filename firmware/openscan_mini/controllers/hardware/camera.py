@@ -452,7 +452,51 @@ class CameraController:
         arr = self._picam.capture_array("main")
         return arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
 
+    def _frame_brightness(self) -> float:
+        """Mean luma of the centre 40% crop. Used to detect overexposure before AF."""
+        import numpy as np
+        try:
+            rgb = self._grab_rgb()
+            h, w = rgb.shape[:2]
+            cy, cx = h // 2, w // 2
+            dh, dw = h // 5, w // 5
+            crop = rgb[cy - dh : cy + dh, cx - dw : cx + dw]
+            if crop.ndim == 3:
+                luma = crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114
+            else:
+                luma = crop.astype("float32")
+            return float(np.mean(luma))
+        except Exception:
+            return 128.0
+
+    def _ensure_good_exposure_for_af(self) -> int:
+        """
+        Before AF sweep: if the frame is overexposed the Laplacian = 0 everywhere
+        and AF cannot converge. Temporarily shorten the shutter until the center
+        crop is not clipped, then return the temporary shutter used so the caller
+        can restore it afterwards.
+        """
+        import numpy as np
+        original_shutter = self.settings.shutter_us
+        shutter = original_shutter
+
+        for _ in range(5):
+            brightness = self._frame_brightness()
+            if brightness <= 220:
+                break
+            # Halve exposure and wait for sensor to catch up
+            shutter = max(500, shutter // 2)
+            self._picam.set_controls({"ExposureTime": shutter})
+            time.sleep(0.3)
+            logger.info(f"AF pre-exposure: brightness={brightness:.0f} → shutter={shutter}µs")
+
+        return original_shutter  # caller restores this after the sweep
+
     def _do_autofocus_sweep(self) -> int:
+        # ── Step 0: Fix overexposure so Laplacian works ──────────────────────
+        original_shutter = self._ensure_good_exposure_for_af()
+        time.sleep(0.2)  # let sensor settle on new exposure
+
         best_pos = _VCM_SWEEP_START
         best_sharp = -1.0
 
@@ -499,6 +543,12 @@ class CameraController:
                     best_pos = pos
 
         _vcm_set(best_pos)
+
+        # Restore original shutter (AF may have shortened it to fix overexposure)
+        if self.settings.shutter_us != original_shutter:
+            self._picam.set_controls({"ExposureTime": original_shutter})
+            logger.info(f"AF restored shutter to {original_shutter}µs")
+
         logger.info(f"AF done: best_pos={best_pos} sharpness={best_sharp:.1f} "
                     f"({'sharp' if best_sharp >= _AF_SHARP_THRESHOLD else 'still soft'})")
         self.settings.lens_position = best_pos / 150.0
