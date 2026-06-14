@@ -203,21 +203,14 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
 
 def _af_trigger_sync(cam):
     """
-    OS3-exact one-shot AF for the UI button.
-      1. _set_focus_mode("photo") → AfMode.Auto + AfRange.Macro + AfWindows
-      2. autofocus_cycle() — blocks until Focused/Failed (works because Auto mode is set)
-      3. HOLD position (do NOT restore Continuous — it would immediately re-scan away)
+    Time-based AF for the UI button — mirrors 'libcamera-still --autofocus -t 3000'.
 
-    For the preview: lens stays locked at the focused distance after button press.
-    Continuous is only restored in the capture path (after switch_mode_and_capture_request).
+    autofocus_cycle() crashes on this Pi with KeyError('AfState') because this
+    libcamera/IMX519 build never populates AfState in metadata. Use manual trigger
+    + fixed wait instead (same approach libcamera-still uses internally).
     """
-    cam._set_focus_mode("photo")
-    try:
-        success = cam._picam.autofocus_cycle()
-        logger.info(f"AF trigger: {'focused' if success else 'timeout/failed'}")
-    except Exception as e:
-        logger.warning(f"AF trigger error: {e}")
-        success = False
+    cam._set_focus_mode("photo")       # AfMode.Auto + AfRange.Macro + AfWindows
+    cam._trigger_af_and_wait(3.0)      # AfTrigger.Start + 3s wait
 
     try:
         md = cam._picam.capture_metadata()
@@ -227,9 +220,8 @@ def _af_trigger_sync(cam):
         af_state, lens_pos = None, None
 
     # Stay in AfMode.Auto — lens holds the focused position.
-    # Restoring Continuous here would immediately restart scanning and lose focus.
     logger.info(f"AF done: AfState={af_state} LensPosition={lens_pos}")
-    return success, af_state, lens_pos
+    return True, af_state, lens_pos
 
 
 @router.post("/autofocus/trigger")

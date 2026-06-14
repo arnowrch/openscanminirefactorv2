@@ -400,23 +400,39 @@ class CameraController:
 
     # ── picamera2 capture internals ─────────────────────────────────────────
 
+    def _trigger_af_and_wait(self, wait_s: float = 3.0) -> None:
+        """
+        Time-based AF trigger — equivalent to 'libcamera-still --autofocus -t 3000'.
+
+        autofocus_cycle() is NOT usable on this Pi: it internally accesses
+        metadata['AfState'] with a direct key lookup, but IMX519 on this
+        libcamera build never populates AfState → KeyError crash every time.
+
+        Instead: set AfMode.Auto + AfRange.Macro + AfTrigger.Start, then wait.
+        The VCM physically moves and settles within ~2-3s. No AfState needed.
+        """
+        import time
+        try:
+            self._picam.set_controls({
+                "AfTrigger": _lc_controls.AfTriggerEnum.Start,
+            })
+            logger.info(f"AF trigger fired (time-based, {wait_s}s wait)")
+            time.sleep(wait_s)
+            logger.info("AF wait done — VCM should have settled")
+        except Exception as e:
+            logger.warning(f"AF trigger error: {e}")
+
     def _capture_jpeg_picam2(self) -> bytes:
         """
-        Full-res still — OS3-exact AF sequence:
-          1. _set_focus_mode("photo") → AfMode.Auto + AfWindows (MUST be before autofocus_cycle)
-          2. autofocus_cycle() → blocks until AfState=Focused/Failed (now works: Auto mode set)
+        Full-res still with time-based AF (libcamera-still --autofocus equivalent).
+          1. _set_focus_mode("photo") → AfMode.Auto + AfRange.Macro + AfWindows
+          2. _trigger_af_and_wait(3s) → AfTrigger.Start + sleep (VCM settles)
           3. switch_mode_and_capture_request → full-res still
-          4. switch_mode back to preview
-          5. _set_focus_mode("preview") → restore AfMode.Continuous for live view
+          4. switch_mode back to preview + restore AfMode.Continuous
         """
         if self.settings.autofocus:
-            # Step 1+2: OS3 sequence — Auto mode first, THEN cycle
             self._set_focus_mode("photo")
-            try:
-                success = self._picam.autofocus_cycle()
-                logger.info(f"AF cycle result: {'focused' if success else 'timeout/failed'}")
-            except Exception as e:
-                logger.warning(f"AF cycle error ({e}) — capturing with current focus")
+            self._trigger_af_and_wait(3.0)
 
         # 3 attempts with exponential backoff (OS3 pattern)
         last_exc = None
