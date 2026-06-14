@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from openscan_mini.models.scan import ScanSetting
 from openscan_mini.services.project_manager import ProjectManager, get_project_manager
@@ -304,6 +305,78 @@ async def get_project_scan(project_name: str, scan_index: int) -> dict:
             for p in photos
         ],
     }
+
+
+def _select_export_files(scan_dir: Path, mode: str) -> list[Path]:
+    """
+    Pick which photos go into the export ZIP.
+
+    mode="best" (default): one sharp image per angle — the focus-stacked frames
+        if the scan was stacked, otherwise the plain per-position captures
+        (drops the raw fs## focus brackets so photogrammetry gets one clean
+        image per viewpoint, no duplicates).
+    mode="all": every JPEG in the scan folder (raw brackets included).
+    """
+    all_jpgs = sorted(scan_dir.glob("*.jpg"))
+    if mode == "all":
+        return all_jpgs
+
+    stacked = [p for p in all_jpgs if p.name.endswith("_stacked.jpg")]
+    if stacked:
+        return stacked
+    # No stacking: keep final captures, drop raw focus brackets (… _fs00.jpg)
+    finals = [p for p in all_jpgs if "_fs" not in p.name]
+    return finals or all_jpgs
+
+
+def _build_scan_zip(scan_dir: Path, project_name: str, scan_index: int, mode: str) -> Path:
+    """Zip the selected photos into a temp file with clean sequential names.
+
+    Entry names: ``0001_r00_t001.jpg`` — a zero-padded running index (so a few
+    hundred files stay ordered and easy to eyeball for gaps) plus the original
+    r{rotor}_t{turntable} stem as a hint for photogrammetry setup. JPEGs are
+    already compressed, so we store without re-compressing (fast, low CPU).
+    """
+    import tempfile
+    import zipfile
+
+    files = _select_export_files(scan_dir, mode)
+    if not files:
+        raise HTTPException(status_code=404, detail="No photos to export")
+
+    tmp = tempfile.NamedTemporaryFile(prefix=f"{project_name}_scan{scan_index:02d}_",
+                                      suffix=".zip", delete=False)
+    tmp.close()
+    width = max(4, len(str(len(files))))
+    with zipfile.ZipFile(tmp.name, "w", compression=zipfile.ZIP_STORED) as zf:
+        for i, p in enumerate(files, start=1):
+            stem = p.stem.replace("_stacked", "")
+            arcname = f"{i:0{width}d}_{stem}.jpg"
+            zf.write(p, arcname=arcname)
+    return Path(tmp.name)
+
+
+@router.get("/library/{project_name}/{scan_index}/archive")
+async def download_scan_archive(project_name: str, scan_index: int, mode: str = "best"):
+    """Download a whole scan as a single ZIP (best-per-angle by default)."""
+    if ".." in project_name:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    from openscan_mini.services.project_manager import PROJECTS_DIR
+    scan_dir = PROJECTS_DIR / project_name / f"scan{scan_index:02d}"
+    if not scan_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    zip_path = await asyncio.to_thread(
+        _build_scan_zip, scan_dir, project_name, scan_index, mode
+    )
+    safe_proj = project_name.replace(" ", "_")
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=f"{safe_proj}_scan{scan_index:02d}_{mode}.zip",
+        background=BackgroundTask(lambda: zip_path.unlink(missing_ok=True)),
+    )
 
 
 @router.get("/library/{project_name}/{scan_index}/{filename}")

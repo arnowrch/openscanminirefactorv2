@@ -655,7 +655,7 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
     <div class="flex aic jb">
       <span class="sec-ttl" x-text="selScan"></span>
       <div class="flex g2">
-        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="dlAll()">↓ All</button>
+        <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="dlAll()" title="Download whole scan as one ZIP (best image per angle)">↓ ZIP</button>
         <button class="btn btn-g" style="font-size:9px;padding:4px 8px" @click="selScan=null;selFiles=[]">✕</button>
       </div>
     </div>
@@ -980,7 +980,19 @@ function app(){return{
     }catch(e){}
   },
   openPhotoUrl(url){window.open(this.api.replace('/api/v1','')+url)},
-  dlAll(){for(const f of this.selFiles){const a=document.createElement('a');a.href=this.api.replace('/api/v1','')+f.download_url;a.download=f.filename;a.click();}},
+  dlAll(){
+    if(!this.selScan||!this.selFiles.length){return;}
+    const idx=this.selScan.lastIndexOf('/');
+    if(idx<0){ // legacy flat scan — no project archive route, fall back to per-file
+      const base=this.api.replace('/api/v1','');
+      for(const f of this.selFiles){const a=document.createElement('a');a.href=base+f.download_url;a.download=f.filename;a.click();}
+      return;
+    }
+    const proj=this.selScan.slice(0,idx), si=this.selScan.slice(idx+1);
+    const url=`${this.api}/scan/library/${encodeURIComponent(proj)}/${si}/archive?mode=best`;
+    const a=document.createElement('a');a.href=url;a.click();
+    this.toast('Building ZIP — download starts shortly','info');
+  },
 
   /* ─ utils ─ */
   fmtT(s){if(!s)return'0s';const m=Math.floor(s/60),sec=Math.round(s%60);return m>0?m+'m '+sec+'s':sec+'s'},
