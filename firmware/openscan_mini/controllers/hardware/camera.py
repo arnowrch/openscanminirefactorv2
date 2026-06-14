@@ -574,30 +574,43 @@ class CameraController:
         except Exception:
             return 128.0
 
+    # AF wants a CLEAN, non-clipped image with real edge contrast:
+    #  - target a moderate brightness so white/shiny objects don't clip at 255
+    #    (clipped highlights = flat = no contrast = AF can't find the peak)
+    #  - force gain=1 so sensor noise doesn't masquerade as high-frequency detail
+    #    (noise inflates Laplacian variance → false sharpness peak)
+    _AF_BRIGHT_LOW = 80
+    _AF_BRIGHT_HIGH = 150
+
     def _ensure_good_exposure_for_af(self) -> int:
         """
-        Before AF sweep: bring centre brightness into 60–200 so Laplacian works.
-        Always starts from 50ms regardless of current settings so the loop converges
-        quickly (avoids long settle times from e.g. 500ms user shutter).
-        Floor: 5ms, ceiling: 200ms.
+        Before AF sweep: bring centre brightness into a moderate, non-clipping range
+        and force gain=1 so the sharpness metric sees real edges, not noise.
+        Starts from ≤20ms so the loop converges fast. Floor: 2ms, ceiling: 200ms.
         Returns the shutter actually used; caller decides whether to keep it.
         """
-        shutter = min(self.settings.shutter_us, 50_000)  # cap start at 50ms
+        # Kill gain for the duration of AF — noise corrupts the sharpness signal.
+        try:
+            self._picam.set_controls({"AnalogueGain": 1.0})
+        except Exception as e:
+            logger.warning(f"AF: could not force gain=1: {e}")
+
+        shutter = min(self.settings.shutter_us, 20_000)  # cap start at 20ms
         self._picam.set_controls({"ExposureTime": shutter})
-        time.sleep(0.35)  # one full frame at 50ms
+        time.sleep(0.30)
 
         for _ in range(6):
             brightness = self._frame_brightness()
-            logger.info(f"AF pre-exposure: brightness={brightness:.0f} shutter={shutter}µs")
-            if 60 <= brightness <= 200:
+            logger.info(f"AF pre-exposure: brightness={brightness:.0f} shutter={shutter}µs gain=1.0")
+            if self._AF_BRIGHT_LOW <= brightness <= self._AF_BRIGHT_HIGH:
                 break
-            if brightness > 200:
-                shutter = max(5_000, shutter // 2)
+            if brightness > self._AF_BRIGHT_HIGH:
+                shutter = max(2_000, shutter // 2)
             else:
                 shutter = min(200_000, shutter * 2)
             self._picam.set_controls({"ExposureTime": shutter})
             # Wait long enough for sensor to apply new exposure (≥ 2 frame periods)
-            time.sleep(max(0.25, shutter / 1_000_000 * 3))
+            time.sleep(max(0.20, shutter / 1_000_000 * 3))
 
         return shutter  # return the USED shutter, not the original
 
@@ -705,16 +718,18 @@ class CameraController:
 
         _vcm_set(best_pos)
 
-        # Keep the AF shutter if it was a significant improvement
-        # (don't restore an overexposed setting that made AF fail in the first place)
-        if af_shutter != self.settings.shutter_us:
-            if af_shutter < self.settings.shutter_us // 2:
-                # We had to shorten significantly → keep the better exposure
-                self.settings.shutter_us = af_shutter
-                logger.info(f"AF kept corrected shutter {af_shutter}µs (was overexposed)")
-            else:
-                # Minor difference → restore original
-                self._picam.set_controls({"ExposureTime": self.settings.shutter_us})
+        # Adopt the clean AF exposure (short shutter + gain=1) as the live setting.
+        # This is the well-exposed, non-clipped, low-noise image AF just converged
+        # on — exactly what we want for both preview and capture. Persist it so the
+        # AE loop / next capture don't snap back to an over-bright, high-gain state.
+        self.settings.shutter_us = af_shutter
+        self.settings.gain = 1.0
+        try:
+            self._picam.set_controls({"ExposureTime": af_shutter, "AnalogueGain": 1.0})
+        except Exception:
+            pass
+        self._persist_settings()
+        logger.info(f"AF kept clean exposure: shutter={af_shutter}µs gain=1.0")
 
         logger.info(f"AF done: best_pos={best_pos} sharpness={best_sharp:.1f} "
                     f"({'sharp' if best_sharp >= _AF_SHARP_THRESHOLD else 'still soft'})")
