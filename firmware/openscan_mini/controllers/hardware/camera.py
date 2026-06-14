@@ -147,55 +147,70 @@ class CameraController:
                 self._full_sensor_size = (4656, 3496)  # IMX519 fallback
         return self._full_sensor_size
 
-    def _apply_continuous_af(self):
-        """
-        Enable continuous AF for live preview.
+    def _get_af_window(self):
+        """Central 10% AF window in full sensor pixel coords (OS3 default)."""
+        full_x, full_y = self._get_full_sensor_size()
+        win_w = max(1, full_x // 10)
+        win_h = max(1, full_y // 10)
+        x0 = (full_x - win_w) // 2
+        y0 = (full_y - win_h) // 2
+        return [(x0, y0, win_w, win_h)]
 
-        AfWindows are specified in FULL SENSOR pixel coordinates (4656×3496),
-        not preview coordinates. OS3 does the same — this is a libcamera requirement.
-        Using a central 20% window focuses on the object, not the background.
+    def _set_focus_mode(self, mode: str = "preview") -> None:
         """
-        if not self.settings.autofocus:
+        Configure AF mode. Mirrors OS3's _configure_focus().
+
+        mode="preview"  → AfMode.Continuous (lens hunts continuously)
+        mode="photo"    → AfMode.Auto + AfWindows (ready for autofocus_cycle)
+        mode="manual"   → AfMode.Manual + LensPosition from settings
+        """
+        if not self.settings.autofocus or mode == "manual":
             try:
                 lp = max(0.0, self.settings.lens_position)
                 self._picam.set_controls({
                     "AfMode": _lc_controls.AfModeEnum.Manual,
                     "LensPosition": lp,
                 })
-                logger.info(f"Manual focus set: {lp:.2f} diopters")
+                logger.info(f"Manual focus: {lp:.2f}d")
             except Exception as e:
-                logger.warning(f"Manual focus set failed: {e}")
+                logger.warning(f"Manual focus failed: {e}")
             return
 
         try:
-            full_x, full_y = self._get_full_sensor_size()
-            # Central 20% of sensor → tightly metered on center object
-            win_w = max(1, full_x // 5)
-            win_h = max(1, full_y // 5)
-            x0 = (full_x - win_w) // 2
-            y0 = (full_y - win_h) // 2
-
-            self._picam.set_controls({
-                "AfMetering": _lc_controls.AfMeteringEnum.Windows,
-                "AfWindows": [(x0, y0, win_w, win_h)],
-                "AfMode": _lc_controls.AfModeEnum.Continuous,
-                "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
-            })
-            logger.info(f"Continuous AF enabled, window=({x0},{y0},{win_w},{win_h}) in sensor coords")
-        except Exception as e:
-            # Fallback: continuous without custom window
-            logger.warning(f"AF window setup failed ({e}) — trying without window")
-            try:
+            win = self._get_af_window()
+            if mode == "photo":
+                # OS3 exact: set AfMode.Auto BEFORE calling autofocus_cycle()
+                # If Continuous is set, autofocus_cycle() trigger is ignored → AfState stays null
                 self._picam.set_controls({
+                    "AfMetering": _lc_controls.AfMeteringEnum.Windows,
+                    "AfWindows": win,
+                    "AfMode": _lc_controls.AfModeEnum.Auto,
+                    "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
+                })
+                logger.info(f"AF mode=Auto (photo), window={win}")
+            else:
+                # preview: Continuous so lens stays responsive
+                self._picam.set_controls({
+                    "AfMetering": _lc_controls.AfMeteringEnum.Windows,
+                    "AfWindows": win,
                     "AfMode": _lc_controls.AfModeEnum.Continuous,
                     "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
                 })
+                logger.info(f"AF mode=Continuous (preview)")
+        except Exception as e:
+            logger.warning(f"AF mode={mode} setup failed: {e}")
+            try:
+                target = _lc_controls.AfModeEnum.Auto if mode == "photo" else _lc_controls.AfModeEnum.Continuous
+                self._picam.set_controls({"AfMode": target})
             except Exception as e2:
-                logger.error(f"Continuous AF failed: {e2}")
+                logger.error(f"AF mode fallback failed: {e2}")
 
-    # Alias kept for backward compat with setters
+    # Keep old name as alias so existing callers still work
+    def _apply_continuous_af(self):
+        self._set_focus_mode("preview")
+
     def _apply_focus(self, mode: str = "preview"):
-        self._apply_continuous_af()
+        self._set_focus_mode(mode)
 
     def _encode_jpeg(self, array, quality: int = None) -> bytes:
         try:
@@ -384,26 +399,23 @@ class CameraController:
 
     def _capture_jpeg_picam2(self) -> bytes:
         """
-        Full-res still with AF.
-
-        AF flow (matches OS3 pattern exactly):
-          1. autofocus_cycle() → internally sets AfMode.Auto + AfTrigger.Start
-          2. Waits for AfState = Focused or Failed (timeout 5s)
-          3. switch_mode → capture in still config
-          4. Restore continuous AF for preview stream
-
-        Do NOT pre-set AfMode before autofocus_cycle(). It manages that itself.
-        AfWindows set during _apply_continuous_af() remain active for the cycle.
+        Full-res still — OS3-exact AF sequence:
+          1. _set_focus_mode("photo") → AfMode.Auto + AfWindows (MUST be before autofocus_cycle)
+          2. autofocus_cycle() → blocks until AfState=Focused/Failed (now works: Auto mode set)
+          3. switch_mode_and_capture_request → full-res still
+          4. switch_mode back to preview
+          5. _set_focus_mode("preview") → restore AfMode.Continuous for live view
         """
         if self.settings.autofocus:
+            # Step 1+2: OS3 sequence — Auto mode first, THEN cycle
+            self._set_focus_mode("photo")
             try:
-                success = self._picam.autofocus_cycle(timeout=5)
-                if not success:
-                    logger.warning("AF cycle timed out — capturing with current focus")
+                success = self._picam.autofocus_cycle(timeout=8)
+                logger.info(f"AF cycle result: {'focused' if success else 'timeout/failed'}")
             except Exception as e:
                 logger.warning(f"AF cycle error ({e}) — capturing with current focus")
 
-        # 3 attempts with exponential backoff (matches OS3 _capture_array)
+        # 3 attempts with exponential backoff (OS3 pattern)
         last_exc = None
         for attempt in range(1, 4):
             try:
@@ -414,8 +426,8 @@ class CameraController:
                     req.release()
 
                 self._picam.switch_mode(self._preview_cfg)
-                # Do NOT call _apply_continuous_af() here — it restarts scanning and loses focus.
-                # AfMode.Auto (set by autofocus_cycle) holds the lens at the focused position.
+                # Step 5: restore Continuous for preview (OS3 does this after every capture)
+                self._set_focus_mode("preview")
 
                 data = self._encode_jpeg(array)
                 logger.info(f"Captured {len(data):,} bytes @ {self.settings.width}×{self.settings.height}")
