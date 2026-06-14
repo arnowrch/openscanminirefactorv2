@@ -43,6 +43,10 @@ _VCM_SWEEP_START = 50
 _VCM_SWEEP_END   = 4000
 _VCM_SWEEP_STEP  = 150  # coarse pass — 27 steps across full range
 _VCM_FINE_STEP   = 15   # fine pass ±150 around best
+# Narrow re-focus window for per-photo AF during a scan: focus drifts little
+# between adjacent turntable steps, so search only ±span around the last lock.
+_VCM_NARROW_SPAN = 450  # ±3 diopters around last position
+_VCM_NARROW_STEP = 45   # coarse step inside the narrow window
 
 
 def _vcm_set(pos: int) -> bool:
@@ -180,6 +184,7 @@ class CameraController:
         self._lock = threading.Lock()
         self._store = None
         self._last_preview_jpeg: Optional[bytes] = None  # served during AF/capture busy
+        self._last_af_vcm: Optional[int] = None  # last AF lock — seeds narrow re-focus
 
         if _PICAM2_AVAILABLE:
             self._init_picamera2()
@@ -582,12 +587,16 @@ class CameraController:
     _AF_BRIGHT_LOW = 80
     _AF_BRIGHT_HIGH = 150
 
-    def _ensure_good_exposure_for_af(self) -> int:
+    def _ensure_good_exposure_for_af(self, reset: bool = True) -> int:
         """
         Before AF sweep: bring centre brightness into a moderate, non-clipping range
         and force gain=1 so the sharpness metric sees real edges, not noise.
-        Starts from ≤20ms so the loop converges fast. Floor: 2ms, ceiling: 200ms.
-        Returns the shutter actually used; caller decides whether to keep it.
+
+        reset=True  (full AF): start from ≤20ms and climb — robust from any state.
+        reset=False (narrow AF during scan): start from the current, already-good
+            shutter so the first brightness check passes immediately and we don't
+            re-climb from 20ms to ~160ms every single photo.
+        Floor: 2ms, ceiling: 200ms. Returns the shutter actually used.
         """
         # Kill gain for the duration of AF — noise corrupts the sharpness signal.
         try:
@@ -595,7 +604,10 @@ class CameraController:
         except Exception as e:
             logger.warning(f"AF: could not force gain=1: {e}")
 
-        shutter = min(self.settings.shutter_us, 20_000)  # cap start at 20ms
+        if reset:
+            shutter = min(self.settings.shutter_us, 20_000)  # cap start at 20ms
+        else:
+            shutter = max(2_000, min(200_000, self.settings.shutter_us))
         self._picam.set_controls({"ExposureTime": shutter})
         time.sleep(0.30)
 
@@ -612,9 +624,27 @@ class CameraController:
             # Wait long enough for sensor to apply new exposure (≥ 2 frame periods)
             time.sleep(max(0.20, shutter / 1_000_000 * 3))
 
+        # Scene still too dark even at max shutter → almost always "ringlight off".
+        if self._frame_brightness() < self._AF_BRIGHT_LOW and shutter >= 150_000:
+            logger.warning(
+                "AF: scene too dark even at long exposure — is the ringlight ON? "
+                "Contrast AF needs light to find focus."
+            )
+
         return shutter  # return the USED shutter, not the original
 
-    def _do_autofocus_sweep(self) -> int:
+    def _do_autofocus_sweep(self, narrow: bool = False) -> int:
+        """
+        Contrast-detect AF via direct V4L2 VCM control.
+
+        narrow=False (manual button / first scan photo): full sweep across the
+            whole VCM range — robust, finds focus from scratch.
+        narrow=True (subsequent scan photos): sweep only a tight ±_VCM_NARROW_SPAN
+            window around the last found position. Focus barely changes between
+            adjacent turntable steps, so this is fast (a handful of frames) while
+            still re-confirming sharpness for every photo.
+        """
+        do_narrow = narrow and self._last_af_vcm is not None
         # Brief pause so any in-flight stream capture_array() call completes
         # before we take exclusive VCM control. Prevents frame corruption.
         time.sleep(0.2)
@@ -629,7 +659,8 @@ class CameraController:
             logger.warning(f"Could not set AfMode.Manual before sweep: {e}")
 
         # ── Step 1: Fix overexposure so Laplacian works on white objects ─────
-        af_shutter = self._ensure_good_exposure_for_af()
+        # Narrow AF keeps the current (good) exposure instead of re-climbing.
+        af_shutter = self._ensure_good_exposure_for_af(reset=not do_narrow)
         time.sleep(0.15)  # let sensor settle
 
         # ── Step 2: Detect object position → use its centre as AF zone ───────
@@ -654,7 +685,17 @@ class CameraController:
         except Exception as e:
             logger.warning(f"AF object detection failed, using centre: {e}")
 
-        best_pos = _VCM_SWEEP_END
+        # Coarse-pass bounds: full range, or a tight window around last position.
+        if do_narrow:
+            centre = self._last_af_vcm
+            coarse_hi = min(_VCM_SWEEP_END, centre + _VCM_NARROW_SPAN)
+            coarse_lo = max(_VCM_SWEEP_START, centre - _VCM_NARROW_SPAN)
+            coarse_step = _VCM_NARROW_STEP
+            logger.info(f"AF narrow: window {coarse_lo}–{coarse_hi} around last {centre}")
+        else:
+            coarse_hi, coarse_lo, coarse_step = _VCM_SWEEP_END, _VCM_SWEEP_START, _VCM_SWEEP_STEP
+
+        best_pos = coarse_hi
         best_sharp = -1.0
 
         # ── Pass 1: coarse sweep MACRO→INFINITY (foreground-first) ──────────
@@ -663,7 +704,7 @@ class CameraController:
         # prevents locking onto distant background texture.
         declining = 0
         _diag_done = False  # one-shot detailed diagnostics on first measurement
-        for pos in range(_VCM_SWEEP_END, _VCM_SWEEP_START - 1, -_VCM_SWEEP_STEP):
+        for pos in range(coarse_hi, coarse_lo - 1, -coarse_step):
             _vcm_set(pos)
             time.sleep(0.15)  # VCM settle
             try:
@@ -733,6 +774,7 @@ class CameraController:
 
         logger.info(f"AF done: best_pos={best_pos} sharpness={best_sharp:.1f} "
                     f"({'sharp' if best_sharp >= _AF_SHARP_THRESHOLD else 'still soft'})")
+        self._last_af_vcm = best_pos  # seed the next narrow re-focus
         self.settings.lens_position = best_pos / 150.0
         return best_pos
 
@@ -803,14 +845,16 @@ class CameraController:
 
     def _capture_jpeg_picam2(self) -> bytes:
         """
-        Full-res still with time-based AF (libcamera-still --autofocus equivalent).
-          1. _set_focus_mode("photo") → AfMode.Auto + AfRange.Macro + AfWindows
-          2. _trigger_af_and_wait(3s) → AfTrigger.Start + sleep (VCM settles)
-          3. switch_mode_and_capture_request → full-res still
-          4. switch_mode back to preview + restore AfMode.Continuous
+        Full-res still with per-photo contrast AF via direct V4L2 VCM control.
+
+        AF runs the in-process sharpness sweep (narrow window after the first lock).
+        The VCM is held in Manual focus throughout — we must NOT switch to
+        AfMode.Continuous, or libcamera's IPA would re-drive the VCM and undo the
+        position we just converged on.
         """
         if self.settings.autofocus:
-            self._do_autofocus_sweep()
+            # First photo: full sweep. Subsequent: narrow window around last lock.
+            self._do_autofocus_sweep(narrow=(self._last_af_vcm is not None))
 
         # 3 attempts with exponential backoff (OS3 pattern)
         last_exc = None
@@ -823,8 +867,15 @@ class CameraController:
                     req.release()
 
                 self._picam.switch_mode(self._preview_cfg)
-                # Step 5: restore Continuous for preview (OS3 does this after every capture)
-                self._set_focus_mode("preview")
+                # Hold the focused VCM position: stay Manual and re-assert it
+                # (the mode switch can reset libcamera controls). Continuous AF
+                # here would drift the lens off the locked focus.
+                try:
+                    self._picam.set_controls({"AfMode": _lc_controls.AfModeEnum.Manual})
+                    if self._last_af_vcm is not None:
+                        _vcm_set(self._last_af_vcm)
+                except Exception:
+                    pass
 
                 data = self._encode_jpeg(array)
                 logger.info(f"Captured {len(data):,} bytes @ {self.settings.width}×{self.settings.height}")
