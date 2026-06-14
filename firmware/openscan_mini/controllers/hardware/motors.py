@@ -1,8 +1,12 @@
 """
 Stepper motor controller for OpenScan Mini.
 
-Trapezoidal acceleration profile adapted from OpenScan3
-(github.com/OpenScan-org/OpenScan3).
+Step timing uses the same cosine-ramp delay loop as the original OS2 firmware
+(OpenScan.py::motorrun). The key insight: gpiozero's DigitalOutputDevice.value
+setter takes ~150-200 µs per call. Pre-calculated timestamps + busy-wait adds
+that overhead AS JITTER on top of the target time, causing stuttering. The
+OS2-style approach instead uses time.sleep(delay) as the timing mechanism —
+gpiozero overhead becomes part of the consistent step period, so motion is smooth.
 
 Each motor owns its own enable, step, and direction pins.
 GPIO is managed via the gpio module (prevents GPIOPinInUse on shared pins).
@@ -22,11 +26,7 @@ logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
-STEP_PULSE_WIDTH = 10e-6  # 10 µs HIGH pulse per step
-MIN_STEP_INTERVAL = 100e-6  # 100 µs minimum between steps
-
-
-HOMING_SPEED = 800   # steps/sec — slow and safe for endstop approach
+HOMING_SPEED = 400   # steps/sec — slow and safe for endstop approach
 
 
 class MotorController:
@@ -176,129 +176,90 @@ class MotorController:
     # Internal movement
     # ------------------------------------------------------------------
 
-    def _pre_calculate_step_times(self, steps: int) -> List[float]:
-        """
-        Return list of absolute timestamps (seconds from move start)
-        for each step pulse, using a trapezoidal speed profile.
-        """
-        accel = self.config.acceleration_steps_sec2
-        max_speed = self.config.max_speed_steps_sec
-
-        accel_time = max_speed / accel
-        accel_steps = int(0.5 * accel * accel_time ** 2)
-
-        if 2 * accel_steps > steps:
-            # Triangular profile — never reach max speed
-            accel_steps = max(1, steps // 2)
-            peak_time = math.sqrt(2 * accel_steps / accel)
-            peak_speed = accel * peak_time
-        else:
-            peak_speed = max_speed
-            peak_time = accel_time
-
-        const_steps = steps - 2 * accel_steps
-
-        times: List[float] = []
-
-        def t_accel(s: int) -> float:
-            return math.sqrt(2 * s / accel)
-
-        # Acceleration phase
-        for s in range(1, accel_steps + 1):
-            times.append(t_accel(s))
-
-        # Constant speed phase
-        if const_steps > 0:
-            interval = 1.0 / peak_speed
-            t_const_start = peak_time
-            for i in range(const_steps):
-                times.append(t_const_start + i * interval)
-
-        # Deceleration phase (mirror of acceleration)
-        t_decel_start = times[-1] if times else 0.0
-        for s in range(accel_steps, 0, -1):
-            dt = t_accel(s + 1) - t_accel(s)
-            dt = max(dt, MIN_STEP_INTERVAL)
-            t_decel_start += dt
-            times.append(t_decel_start)
-
-        # Enforce minimum interval
-        for i in range(1, len(times)):
-            if times[i] - times[i - 1] < MIN_STEP_INTERVAL:
-                times[i] = times[i - 1] + MIN_STEP_INTERVAL
-
-        return times
-
     async def _execute(self, steps: int, direction: int, target_angle: float,
                        check_endstop: bool = False) -> None:
         self.is_moving = True
         self._stop_requested = False
         angle_per_step = 360.0 / self.config.steps_per_rotation * direction
 
-        # Set direction pin
         gpio.set_output_pin(self.config.dir_pin, direction > 0)
-        # Enable motor driver
         gpio.set_output_pin(self.config.enable_pin, False)
 
-        step_times = self._pre_calculate_step_times(steps)
         loop = asyncio.get_event_loop()
-
         try:
             await loop.run_in_executor(
-                _executor, self._run_steps, step_times, angle_per_step, check_endstop
+                _executor, self._run_steps, steps, angle_per_step, check_endstop
             )
         finally:
             self.is_moving = False
-            # Snap to exact target to avoid float drift
             self.current_angle = target_angle
-            # Disable motor (saves power, reduces heat)
             gpio.set_output_pin(self.config.enable_pin, True)
 
-    def _run_steps(self, step_times: List[float], angle_per_step: float,
+    def _run_steps(self, step_count: int, angle_per_step: float,
                    check_endstop: bool = False) -> None:
-        """Blocking step execution — runs in ThreadPoolExecutor."""
-        import time
+        """
+        Cosine-ramp step loop — direct port of OS2's OpenScan.py::motorrun().
 
-        step_pin = self.config.step_pin
+        OS2 uses RPi.GPIO (~10 µs/call). We use gpiozero (~150 µs/call).
+        The fix: use time.sleep(delay) as the timing mechanism so gpiozero
+        overhead becomes part of the consistent step period rather than
+        random jitter on top of a pre-calculated timestamp.
+
+        delay formula (OS2 original, acc=1.0):
+          ramp-up:   delay = delay_init * (1 - cos((ramp-x)/ramp) + 1)  [x=0..ramp]
+          full speed:delay = delay_init
+          ramp-down: delay = delay_init * (1 - cos((ramp+x-N)/ramp) + 1) [x=N-ramp..N]
+        """
+        import time
+        from math import cos
+
+        step_pin  = self.config.step_pin
         endstop_pin = self._endstop.pin if self._endstop else None
-        t_start = time.monotonic()
+
+        # delay_base from config (OS2 default: 0.0001 s = 100 µs per half-step)
+        # We use 0.0002 to absorb gpiozero's ~150 µs overhead and stay smooth.
+        delay_init = self.config.delay_base if self.config.delay_base else 0.0002
+        ramp       = self.config.acceleration_ramp if self.config.acceleration_ramp else 2000
+        acc        = 1.0  # OS2 default — controls ramp steepness (1.0 = full cosine swing)
+
+        delay = delay_init
         executed = 0
 
-        for t_target in step_times:
+        for x in range(step_count):
             if self._stop_requested:
                 break
-
-            # Only check endstop during homing — always-triggered pins block all jog otherwise
             if check_endstop and endstop_pin and gpio.is_button_pressed(endstop_pin):
                 logger.info(f"{self.motor_id}: endstop hit at {self.current_angle:.1f}°")
                 self._endstop_hit = True
                 break
 
-            # Busy-wait for precise timing (last 1 ms), sleep for the rest
-            t_now = time.monotonic() - t_start
-            remaining = t_target - t_now
-            if remaining > 0.001:
-                time.sleep(remaining - 0.001)
-            while time.monotonic() - t_start < t_target:
-                pass
-
-            # Step pulse
+            # Step pulse: HIGH → sleep → LOW → sleep  (same structure as OS2)
             gpio.set_output_pin(step_pin, True)
-            time.sleep(STEP_PULSE_WIDTH)
+            time.sleep(delay)
             gpio.set_output_pin(step_pin, False)
+            time.sleep(delay)
 
             self.current_angle += angle_per_step
             executed += 1
 
-        logger.debug(f"{self.motor_id}: executed {executed}/{len(step_times)} steps")
+            # Cosine ramp — identical to OS2 formula
+            if x <= ramp and x <= step_count / 2:
+                delay = delay_init * (1 + (-1 / acc) * cos((ramp - x) / ramp) + 1 / acc)
+            elif step_count - x <= ramp and x > step_count / 2:
+                delay = delay_init * (1 - (1 / acc) * cos((ramp + x - step_count) / ramp) + 1 / acc)
+            else:
+                delay = delay_init
+
+        logger.debug(f"{self.motor_id}: executed {executed}/{step_count} steps")
 
     def _run_homing_steps(self, max_steps: int, angle_per_step: float) -> bool:
         """Slow homing run — steps until endstop fires or max_steps reached."""
         import time
 
-        step_pin = self.config.step_pin
+        step_pin    = self.config.step_pin
         endstop_pin = self._endstop.pin if self._endstop else None
-        interval = 1.0 / HOMING_SPEED
+        # At HOMING_SPEED=400 steps/sec: half-period = 1.25 ms, well within gpiozero's range
+        half_period = 1.0 / (2 * HOMING_SPEED)
 
         for _ in range(max_steps):
             if self._stop_requested:
@@ -307,10 +268,10 @@ class MotorController:
                 return True
 
             gpio.set_output_pin(step_pin, True)
-            time.sleep(STEP_PULSE_WIDTH)
+            time.sleep(half_period)
             gpio.set_output_pin(step_pin, False)
+            time.sleep(half_period)
             self.current_angle += angle_per_step
-            time.sleep(interval - STEP_PULSE_WIDTH)
 
         return False
 

@@ -17,29 +17,27 @@
       "steps_per_rotation": 48000,
       "angle_per_step": 0.0075,
       "max_speed_steps_sec": 1500,
-      "max_angle_sec": 11.25,
       "acceleration_steps_sec2": 3000,
       "min_angle": -20,
       "max_angle": 60,
       "direction": 1,
       "acceleration_ramp": 2000,
-      "delay_base": 0.0001
+      "delay_base": 0.0002
     },
     "turntable": {
-      "description": "Object rotation (360Â°)",
+      "description": "Object rotation (360°)",
       "step_pin": 11,
       "dir_pin": 9,
       "enable_pin": 22,
       "steps_per_rotation": 3200,
       "angle_per_step": 0.1125,
       "max_speed_steps_sec": 3000,
-      "max_angle_sec": 337.5,
       "acceleration_steps_sec2": 8000,
       "min_angle": 0,
       "max_angle": 360,
       "direction": 1,
       "acceleration_ramp": 200,
-      "delay_base": 0.0001
+      "delay_base": 0.0002
     },
     "extra": {
       "description": "Optional 3rd motor (future use)",
@@ -49,13 +47,12 @@
       "steps_per_rotation": 3200,
       "angle_per_step": 0.1125,
       "max_speed_steps_sec": 3000,
-      "max_angle_sec": 337.5,
       "acceleration_steps_sec2": 8000,
       "min_angle": 0,
       "max_angle": 360,
       "direction": 1,
       "acceleration_ramp": 200,
-      "delay_base": 0.0001
+      "delay_base": 0.0002
     }
   },
 
