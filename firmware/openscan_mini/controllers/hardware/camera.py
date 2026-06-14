@@ -208,7 +208,13 @@ class CameraController:
 
         self._picam.configure(self._preview_cfg)
         self._picam.start()
-        self._apply_continuous_af()
+        # Start in Manual AF so libcamera never fights V4L2 VCM commands.
+        # Our software sweep sets focus_absolute directly; Continuous AF would
+        # override those writes immediately via the IPA.
+        try:
+            self._picam.set_controls({"AfMode": _lc_controls.AfModeEnum.Manual})
+        except Exception as e:
+            logger.warning(f"Could not set AfMode.Manual at startup: {e}")
         logger.info("picamera2 started — IMX519, 1920×1440 preview, 4656×3496 still")
 
     def _get_full_sensor_size(self):
@@ -449,6 +455,9 @@ class CameraController:
                 self._busy = False
 
     def _grab_rgb(self):
+        # Capture twice — first frame after a VCM move may still be from the
+        # previous position (sensor pipeline latency). Second is reliably fresh.
+        self._picam.capture_array("main")
         arr = self._picam.capture_array("main")
         return arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
 
@@ -471,31 +480,36 @@ class CameraController:
 
     def _ensure_good_exposure_for_af(self) -> int:
         """
-        Before AF sweep: if the frame is overexposed the Laplacian = 0 everywhere
-        and AF cannot converge. Temporarily shorten the shutter until the center
-        crop is not clipped, then return the temporary shutter used so the caller
-        can restore it afterwards.
+        Before AF sweep: fix overexposure so Laplacian ≠ 0 on white objects.
+        Returns the shutter value actually used (may differ from settings.shutter_us).
+        The caller decides whether to keep or restore it.
         """
-        import numpy as np
-        original_shutter = self.settings.shutter_us
-        shutter = original_shutter
+        shutter = self.settings.shutter_us
 
-        for _ in range(5):
+        for _ in range(6):
             brightness = self._frame_brightness()
-            if brightness <= 220:
+            if brightness <= 210:
                 break
-            # Halve exposure and wait for sensor to catch up
             shutter = max(500, shutter // 2)
             self._picam.set_controls({"ExposureTime": shutter})
-            time.sleep(0.3)
+            time.sleep(0.25)
             logger.info(f"AF pre-exposure: brightness={brightness:.0f} → shutter={shutter}µs")
 
-        return original_shutter  # caller restores this after the sweep
+        return shutter  # return the USED shutter, not the original
 
     def _do_autofocus_sweep(self) -> int:
-        # ── Step 0: Fix overexposure so Laplacian works ──────────────────────
-        original_shutter = self._ensure_good_exposure_for_af()
-        time.sleep(0.2)  # let sensor settle on new exposure
+        # ── Step 0: Disable libcamera continuous AF so it doesn't override V4L2 ──
+        # AfMode.Continuous sends VCM commands via the IPA and overwrites our
+        # focus_absolute writes on /dev/v4l-subdev1. Switch to Manual first.
+        try:
+            self._picam.set_controls({"AfMode": _lc_controls.AfModeEnum.Manual})
+            time.sleep(0.1)
+        except Exception as e:
+            logger.warning(f"Could not set AfMode.Manual before sweep: {e}")
+
+        # ── Step 1: Fix overexposure so Laplacian works on white objects ─────
+        af_shutter = self._ensure_good_exposure_for_af()
+        time.sleep(0.15)  # let sensor settle
 
         best_pos = _VCM_SWEEP_START
         best_sharp = -1.0
@@ -544,10 +558,16 @@ class CameraController:
 
         _vcm_set(best_pos)
 
-        # Restore original shutter (AF may have shortened it to fix overexposure)
-        if self.settings.shutter_us != original_shutter:
-            self._picam.set_controls({"ExposureTime": original_shutter})
-            logger.info(f"AF restored shutter to {original_shutter}µs")
+        # Keep the AF shutter if it was a significant improvement
+        # (don't restore an overexposed setting that made AF fail in the first place)
+        if af_shutter != self.settings.shutter_us:
+            if af_shutter < self.settings.shutter_us // 2:
+                # We had to shorten significantly → keep the better exposure
+                self.settings.shutter_us = af_shutter
+                logger.info(f"AF kept corrected shutter {af_shutter}µs (was overexposed)")
+            else:
+                # Minor difference → restore original
+                self._picam.set_controls({"ExposureTime": self.settings.shutter_us})
 
         logger.info(f"AF done: best_pos={best_pos} sharpness={best_sharp:.1f} "
                     f"({'sharp' if best_sharp >= _AF_SHARP_THRESHOLD else 'still soft'})")
