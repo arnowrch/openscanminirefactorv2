@@ -58,15 +58,20 @@ def analyze(rgb_array: np.ndarray,
     small = _resize(rgb_array, _ANALYSIS_SIZE)
     gray = _to_gray(small)
 
-    # Sharpness
+    # Sharpness on full frame
     result.sharpness = _sharpness(gray)
     result.is_sharp = result.sharpness >= SHARPNESS_MIN
 
-    # Brightness
-    result.brightness = float(gray.mean())
+    # Brightness on centre 20% crop — avoids dark background pulling mean down
+    # (same region as the AF crosshair, so "Exp OK" reflects the object, not background)
+    h, w = gray.shape[:2]
+    cy, cx = h // 2, w // 2
+    dh, dw = h // 10, w // 10
+    center_crop = gray[cy - dh: cy + dh, cx - dw: cx + dw]
+    result.brightness = float(center_crop.mean())
     result.is_exposed = BRIGHTNESS_LOW <= result.brightness <= BRIGHTNESS_HIGH
 
-    # Auto-exposure suggestion (simple proportional correction)
+    # Auto-exposure suggestion (proportional correction)
     if result.brightness > 0:
         ratio = BRIGHTNESS_TARGET / result.brightness
         new_shutter = int(current_shutter_us * ratio)
@@ -74,13 +79,14 @@ def analyze(rgb_array: np.ndarray,
         if abs(new_shutter - current_shutter_us) > current_shutter_us * 0.15:
             result.suggested_shutter_us = new_shutter
 
-        # If shutter is maxed and still dark, nudge gain
+        # If shutter is maxed and still dark, nudge gain up
         if new_shutter >= SHUTTER_MAX_US and result.brightness < BRIGHTNESS_LOW:
             new_gain = min(GAIN_MAX, current_gain * ratio)
             if new_gain > current_gain * 1.1:
                 result.suggested_gain = round(new_gain, 2)
         elif result.brightness > BRIGHTNESS_HIGH and current_gain > GAIN_MIN * 1.1:
-            result.suggested_gain = max(GAIN_MIN, current_gain / ratio)
+            # Overexposed: reduce gain proportionally (multiply by ratio < 1)
+            result.suggested_gain = round(max(GAIN_MIN, current_gain * ratio), 2)
 
     # Crop box: find the dominant object region
     result.crop_box = _detect_object_box(gray, rgb_array.shape)

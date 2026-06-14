@@ -37,11 +37,11 @@ logger = logging.getLogger(__name__)
 _VCM_DEV = "/dev/v4l-subdev1"
 _VCM_MIN = 0
 _VCM_MAX = 4095
-# IMX519 VCM practical range: 0=infinity, ~300=50cm, ~900=10cm, ~2000=4cm (macro)
-# Full sweep must cover 0–2500 to catch close-focus macro range.
+# IMX519 VCM practical range: 0=infinity, ~1000=~30cm, ~2000=~10cm, ~3300=~5cm (macro)
+# At multiplier 150: 21d≈3150, 27d≈4050. Sweep must cover 0–4000 to reach close macro.
 _VCM_SWEEP_START = 50
-_VCM_SWEEP_END   = 2500
-_VCM_SWEEP_STEP  = 100  # coarse pass — 25 steps across full range
+_VCM_SWEEP_END   = 4000
+_VCM_SWEEP_STEP  = 150  # coarse pass — 27 steps across full range
 _VCM_FINE_STEP   = 15   # fine pass ±150 around best
 
 
