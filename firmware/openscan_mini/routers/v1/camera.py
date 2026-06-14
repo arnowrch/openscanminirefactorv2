@@ -201,12 +201,63 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
     return {"autofocus": request.enabled, "status": "ok"}
 
 
+def _af_cycle_sync(picam, timeout: float = 5.0):
+    """
+    One-shot AF cycle — mirrors what OS2's 'libcamera-still --autofocus' does.
+    picamera2 >= 0.3.12 has autofocus_cycle(); older builds need manual trigger.
+    Returns (success: bool, af_state: int|None, lens_position: float|None).
+    """
+    import time
+    try:
+        from libcamera import controls as lc
+    except Exception:
+        return False, None, None
+
+    # Prefer built-in autofocus_cycle() if available
+    if hasattr(picam, "autofocus_cycle"):
+        try:
+            success = picam.autofocus_cycle(timeout=timeout)
+            try:
+                md = picam.capture_metadata()
+                af_state = md.get("AfState")
+                lens_pos = md.get("LensPosition")
+            except Exception:
+                af_state, lens_pos = None, None
+            logger.info(f"autofocus_cycle() → success={success} AfState={af_state} LensPosition={lens_pos}")
+            return success, af_state, lens_pos
+        except Exception as e:
+            logger.warning(f"autofocus_cycle() failed ({e}) — falling back to manual trigger")
+
+    # Manual trigger fallback (older picamera2)
+    try:
+        picam.set_controls({
+            "AfMode": lc.AfModeEnum.Auto,
+            "AfTrigger": lc.AfTriggerEnum.Start,
+        })
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            md = picam.capture_metadata()
+            af_state = md.get("AfState")
+            lens_pos = md.get("LensPosition")
+            if af_state == lc.AfStateEnum.Focused:
+                logger.info(f"AF focused (manual trigger) LensPosition={lens_pos}")
+                return True, af_state, lens_pos
+            elif af_state == lc.AfStateEnum.Failed:
+                logger.warning(f"AF failed (manual trigger) LensPosition={lens_pos}")
+                return False, af_state, lens_pos
+            time.sleep(0.05)
+        logger.warning(f"AF timeout after {timeout}s — AfState={af_state}")
+        return False, af_state, lens_pos
+    except Exception as e:
+        logger.error(f"AF manual trigger error: {e}")
+        return False, None, None
+
+
 @router.post("/autofocus/trigger")
 async def trigger_autofocus():
     """
-    Run a single one-shot AF cycle and return the result.
-    More reliable than AfMode.Continuous on Arducam IMX519.
-    Used by the AF button in the UI for immediate visible feedback.
+    Run a single one-shot AF cycle (matches OS2 libcamera-still --autofocus behavior).
+    Works on all picamera2 versions — falls back to manual trigger if autofocus_cycle() absent.
     """
     cam = _get()
     if not _PICAM2_AVAILABLE:
@@ -220,20 +271,57 @@ async def trigger_autofocus():
         with cam._lock:
             cam._busy = True
         try:
-            try:
-                success = await loop.run_in_executor(None, lambda: cam._picam.autofocus_cycle(timeout=5))
-            except Exception as e:
-                logger.warning(f"AF trigger error: {e}")
-                success = False
+            success, af_state, lens_pos = await loop.run_in_executor(
+                None, lambda: _af_cycle_sync(cam._picam, timeout=5.0)
+            )
             cam.settings.autofocus = True
-            # Stay in AfMode.Auto after one-shot cycle — lens holds the focused position.
-            # Do NOT call _apply_continuous_af() here: it restarts continuous scanning and drifts focus.
-            return {"status": "ok", "focused": success}
+            # Stay in AfMode.Auto — lens holds the focused position.
+            # Do NOT call _apply_continuous_af(): restarts scanning and drifts focus.
+            return {
+                "status": "ok",
+                "focused": success,
+                "af_state": af_state,
+                "lens_position": lens_pos,
+            }
         finally:
             with cam._lock:
                 cam._busy = False
 
     return await _run()
+
+
+@router.get("/debug")
+async def camera_debug():
+    """Diagnostic endpoint: AF state, lens position, picamera2 version, camera properties."""
+    cam = _get()
+    info: dict = {"picam2_available": _PICAM2_AVAILABLE}
+    if not _PICAM2_AVAILABLE:
+        return info
+
+    try:
+        import picamera2 as _pc2_mod
+        info["picamera2_version"] = getattr(_pc2_mod, "__version__", "unknown")
+        info["has_autofocus_cycle"] = hasattr(cam._picam, "autofocus_cycle")
+    except Exception:
+        pass
+
+    try:
+        props = cam._picam.camera_properties
+        info["sensor_size"] = str(props.get("PixelArraySize", "unknown"))
+        info["model"] = props.get("Model", "unknown")
+    except Exception as e:
+        info["properties_error"] = str(e)
+
+    try:
+        md = cam._picam.capture_metadata()
+        info["AfState"] = md.get("AfState")
+        info["LensPosition"] = md.get("LensPosition")
+        info["ExposureTime"] = md.get("ExposureTime")
+        info["AnalogueGain"] = md.get("AnalogueGain")
+    except Exception as e:
+        info["metadata_error"] = str(e)
+
+    return info
 
 
 # expose picamera2 availability for the trigger endpoint

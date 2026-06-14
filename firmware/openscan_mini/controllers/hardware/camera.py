@@ -203,6 +203,11 @@ class CameraController:
         except ImportError:
             raise RuntimeError("Pillow not installed: pip install Pillow")
         q = quality if quality is not None else self.settings.jpeg_quality
+        # picamera2 "RGB888" stores B,G,R in memory — swap to RGB for PIL
+        if array.ndim == 3 and array.shape[2] == 3:
+            array = array[:, :, ::-1]
+        elif array.ndim == 3 and array.shape[2] == 4:
+            array = array[:, :, 2::-1]
         img = Image.fromarray(array)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
@@ -236,6 +241,12 @@ class CameraController:
             array = self._picam.capture_array("main")
             from PIL import Image
             import numpy as np
+            # picamera2 "RGB888" = V4L2_PIX_FMT_BGR24 (B,G,R in memory).
+            # PIL treats axis-2 index 0 as Red → swap to get correct colors.
+            if array.ndim == 3 and array.shape[2] == 3:
+                array = array[:, :, ::-1]  # BGR → RGB
+            elif array.ndim == 3 and array.shape[2] == 4:
+                array = array[:, :, 2::-1]  # XRGB/BGRX → RGB
             img = Image.fromarray(array)
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
