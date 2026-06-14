@@ -562,14 +562,20 @@ class CameraController:
             arr = np.ascontiguousarray(arr[:, :, ::-1])
         return arr
 
-    def _frame_brightness(self) -> float:
-        """Mean luma of the centre 40% crop. Used to detect overexposure before AF."""
+    def _frame_brightness(self, cy_frac: float = 0.5, cx_frac: float = 0.5) -> float:
+        """
+        Mean luma of a 40% crop centred at (cy_frac, cx_frac).
+        Metering on the OBJECT zone (not frame centre) stops a dark background
+        from fooling the exposure into over-brightening the subject until it clips.
+        """
         import numpy as np
         try:
             rgb = self._grab_rgb()
             h, w = rgb.shape[:2]
-            cy, cx = h // 2, w // 2
+            cy, cx = int(h * cy_frac), int(w * cx_frac)
             dh, dw = h // 5, w // 5
+            cy = max(dh, min(h - dh, cy))
+            cx = max(dw, min(w - dw, cx))
             crop = rgb[cy - dh : cy + dh, cx - dw : cx + dw]
             if crop.ndim == 3:
                 luma = crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114
@@ -587,10 +593,12 @@ class CameraController:
     _AF_BRIGHT_LOW = 80
     _AF_BRIGHT_HIGH = 150
 
-    def _ensure_good_exposure_for_af(self, reset: bool = True) -> int:
+    def _ensure_good_exposure_for_af(self, reset: bool = True,
+                                     cy_frac: float = 0.5, cx_frac: float = 0.5) -> int:
         """
-        Before AF sweep: bring centre brightness into a moderate, non-clipping range
-        and force gain=1 so the sharpness metric sees real edges, not noise.
+        Before AF sweep: bring the OBJECT-ZONE brightness into a moderate,
+        non-clipping range and force gain=1 so the sharpness metric sees real
+        edges, not noise.
 
         reset=True  (full AF): start from ≤20ms and climb — robust from any state.
         reset=False (narrow AF during scan): start from the current, already-good
@@ -612,7 +620,7 @@ class CameraController:
         time.sleep(0.30)
 
         for _ in range(6):
-            brightness = self._frame_brightness()
+            brightness = self._frame_brightness(cy_frac, cx_frac)
             logger.info(f"AF pre-exposure: brightness={brightness:.0f} shutter={shutter}µs gain=1.0")
             if self._AF_BRIGHT_LOW <= brightness <= self._AF_BRIGHT_HIGH:
                 break
@@ -625,7 +633,7 @@ class CameraController:
             time.sleep(max(0.20, shutter / 1_000_000 * 3))
 
         # Scene still too dark even at max shutter → almost always "ringlight off".
-        if self._frame_brightness() < self._AF_BRIGHT_LOW and shutter >= 150_000:
+        if self._frame_brightness(cy_frac, cx_frac) < self._AF_BRIGHT_LOW and shutter >= 150_000:
             logger.warning(
                 "AF: scene too dark even at long exposure — is the ringlight ON? "
                 "Contrast AF needs light to find focus."
@@ -658,14 +666,10 @@ class CameraController:
         except Exception as e:
             logger.warning(f"Could not set AfMode.Manual before sweep: {e}")
 
-        # ── Step 1: Fix overexposure so Laplacian works on white objects ─────
-        # Narrow AF keeps the current (good) exposure instead of re-climbing.
-        af_shutter = self._ensure_good_exposure_for_af(reset=not do_narrow)
-        time.sleep(0.15)  # let sensor settle
-
-        # ── Step 2: Detect object position → use its centre as AF zone ───────
-        # If analysis finds an object bounding box, measure sharpness there.
-        # Avoids metering on background when object is off-centre (common on turntable).
+        # ── Step 1: Detect object position → use its centre as AF + metering zone ──
+        # Done BEFORE exposure so we meter the SUBJECT, not the (often dark)
+        # background. Metering the background over-brightens the object until it
+        # clips, which destroys the contrast AF needs.
         af_cy_frac = 0.5
         af_cx_frac = 0.5
         try:
@@ -684,6 +688,13 @@ class CameraController:
                 logger.info("AF zone: no object detected — using frame centre")
         except Exception as e:
             logger.warning(f"AF object detection failed, using centre: {e}")
+
+        # ── Step 2: Expose the OBJECT zone (non-clipping, gain=1) ────────────
+        # Narrow AF keeps the current (good) exposure instead of re-climbing.
+        af_shutter = self._ensure_good_exposure_for_af(
+            reset=not do_narrow, cy_frac=af_cy_frac, cx_frac=af_cx_frac
+        )
+        time.sleep(0.15)  # let sensor settle
 
         # Coarse-pass bounds: full range, or a tight window around last position.
         if do_narrow:
