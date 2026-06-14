@@ -65,27 +65,37 @@ def _vcm_diopters_to_raw(diopters: float) -> int:
 
 
 def _measure_sharpness(array) -> float:
-    """Laplacian variance sharpness on centre crop. Higher = sharper."""
+    """
+    Laplacian variance on the centre 20% crop (crosshair zone).
+    Uses cv2 when available — same algorithm as analysis.py so the
+    AF threshold and the Blur indicator are directly comparable.
+    """
     import numpy as np
     if array is None or array.size == 0:
         return 0.0
     h, w = array.shape[:2]
-    # Central 20% crop — matches crosshair area, ignores background
     cy, cx = h // 2, w // 2
     dh, dw = h // 10, w // 10
-    y0, y1 = cy - dh, cy + dh
-    x0, x1 = cx - dw, cx + dw
-    crop = array[y0:y1, x0:x1]
+    crop = array[cy - dh : cy + dh, cx - dw : cx + dw]
     if crop.ndim == 3:
         gray = (crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114).astype("float32")
     else:
         gray = crop.astype("float32")
-    # Laplacian via simple kernel
-    lap = (
-        -gray[:-2, 1:-1] - gray[2:, 1:-1] - gray[1:-1, :-2] - gray[1:-1, 2:]
-        + 4 * gray[1:-1, 1:-1]
-    )
-    return float(lap.var())
+    try:
+        import cv2
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        return float(lap.var())
+    except ImportError:
+        lap = (
+            -gray[:-2, 1:-1] - gray[2:, 1:-1] - gray[1:-1, :-2] - gray[1:-1, 2:]
+            + 4 * gray[1:-1, 1:-1]
+        )
+        return float(lap.var())
+
+
+# Sharpness target: must exceed this after AF before declaring success.
+# Mirrors analysis.py SHARPNESS_MIN so the Blur indicator agrees with AF.
+_AF_SHARP_THRESHOLD = 80.0
 
 
 # ── picamera2 availability ──────────────────────────────────────────────────
@@ -438,42 +448,59 @@ class CameraController:
             with self._lock:
                 self._busy = False
 
+    def _grab_rgb(self):
+        arr = self._picam.capture_array("main")
+        return arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
+
     def _do_autofocus_sweep(self) -> int:
         best_pos = _VCM_SWEEP_START
         best_sharp = -1.0
 
-        # Coarse sweep
+        # ── Pass 1: coarse sweep across full VCM range ───────────────────────
         for pos in range(_VCM_SWEEP_START, _VCM_SWEEP_END + 1, _VCM_SWEEP_STEP):
             _vcm_set(pos)
-            time.sleep(0.12)  # VCM settle + fresh frame
+            time.sleep(0.15)  # VCM settle
             try:
-                arr = self._picam.capture_array("main")
-                rgb = arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
-                s = _measure_sharpness(rgb)
+                s = _measure_sharpness(self._grab_rgb())
             except Exception:
                 s = 0.0
-            logger.debug(f"AF sweep pos={pos} sharpness={s:.1f}")
+            logger.debug(f"AF coarse pos={pos} sharpness={s:.1f}")
             if s > best_sharp:
                 best_sharp = s
                 best_pos = pos
 
-        # Fine sweep ±150 around coarse best (covers one full coarse step on each side)
+        # ── Pass 2: fine sweep ±150 around coarse best, step 15 ─────────────
         for pos in range(max(_VCM_MIN, best_pos - 150), min(_VCM_MAX, best_pos + 151), _VCM_FINE_STEP):
             _vcm_set(pos)
-            time.sleep(0.10)
+            time.sleep(0.12)
             try:
-                arr = self._picam.capture_array("main")
-                rgb = arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
-                s = _measure_sharpness(rgb)
+                s = _measure_sharpness(self._grab_rgb())
             except Exception:
                 s = 0.0
             if s > best_sharp:
                 best_sharp = s
                 best_pos = pos
 
+        # ── Pass 3: ultra-fine closed-loop — only if still below threshold ───
+        # Repeats up to 2× with step=5 to squeeze out the last precision.
+        for _attempt in range(2):
+            if best_sharp >= _AF_SHARP_THRESHOLD:
+                break
+            logger.info(f"AF pass 3 attempt {_attempt+1}: sharp={best_sharp:.1f} < {_AF_SHARP_THRESHOLD}, refining")
+            for pos in range(max(_VCM_MIN, best_pos - 50), min(_VCM_MAX, best_pos + 51), 5):
+                _vcm_set(pos)
+                time.sleep(0.12)
+                try:
+                    s = _measure_sharpness(self._grab_rgb())
+                except Exception:
+                    s = 0.0
+                if s > best_sharp:
+                    best_sharp = s
+                    best_pos = pos
+
         _vcm_set(best_pos)
-        logger.info(f"AF sweep done: best_pos={best_pos} sharpness={best_sharp:.1f}")
-        # Store approximate diopter equivalent
+        logger.info(f"AF done: best_pos={best_pos} sharpness={best_sharp:.1f} "
+                    f"({'sharp' if best_sharp >= _AF_SHARP_THRESHOLD else 'still soft'})")
         self.settings.lens_position = best_pos / 150.0
         return best_pos
 
