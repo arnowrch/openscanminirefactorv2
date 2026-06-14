@@ -203,9 +203,9 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
 
 def _af_trigger_sync(cam):
     """
-    Hill-climb AF via V4L2 VCM + sharpness sweep.
-    libcamera AfMode/AfTrigger do NOT move the VCM on this Arducam IMX519 build.
-    Direct V4L2 focus_absolute on /dev/v4l-subdev1 is the only working path.
+    Manual AF: full in-process VCM sharpness sweep (fast, no camera handoff).
+    rpicam-still --autofocus remains available as a fallback via _do_autofocus_rpicam.
+    _busy is already set by the caller; call the internal method directly.
     """
     best_pos = cam._do_autofocus_sweep()
     return True, None, best_pos

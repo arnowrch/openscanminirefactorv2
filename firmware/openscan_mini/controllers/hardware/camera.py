@@ -632,12 +632,31 @@ class CameraController:
         # foreground object BEFORE the background. Early-exit on peak-then-drop
         # prevents locking onto distant background texture.
         declining = 0
+        _diag_done = False  # one-shot detailed diagnostics on first measurement
         for pos in range(_VCM_SWEEP_END, _VCM_SWEEP_START - 1, -_VCM_SWEEP_STEP):
             _vcm_set(pos)
             time.sleep(0.15)  # VCM settle
             try:
-                s = _measure_sharpness(self._grab_rgb(), af_cy_frac, af_cx_frac)
-            except Exception:
+                arr = self._grab_rgb()
+                if not _diag_done:
+                    import numpy as _np
+                    if arr is None:
+                        logger.info("AF DIAG: _grab_rgb() returned None")
+                    else:
+                        logger.info(
+                            f"AF DIAG: arr shape={getattr(arr,'shape',None)} "
+                            f"dtype={getattr(arr,'dtype',None)} "
+                            f"size={getattr(arr,'size',None)} "
+                            f"contig={getattr(getattr(arr,'flags',None),'c_contiguous',None)} "
+                            f"mean={float(_np.mean(arr)):.1f} "
+                            f"min={float(_np.min(arr)):.0f} max={float(_np.max(arr)):.0f}"
+                        )
+                    _diag_done = True
+                s = _measure_sharpness(arr, af_cy_frac, af_cx_frac)
+            except Exception as _e:
+                if not _diag_done:
+                    logger.info(f"AF DIAG: measurement raised {type(_e).__name__}: {_e}")
+                    _diag_done = True
                 s = 0.0
             logger.debug(f"AF coarse pos={pos} sharpness={s:.1f}")
             if s > best_sharp:
