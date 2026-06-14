@@ -800,20 +800,20 @@ function app(){return{
   },
   async setExposure(us){try{await fetch(`${this.api}/hardware/camera/exposure`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shutter_us:Math.round(us)})})}catch(e){}},
   async toggleAF(){
-    // AF button = one-shot trigger when enabling, off = manual lock
-    if(!this.camAF){
-      // was off → turn on + trigger one-shot cycle immediately
-      this.camAF=true;
-      this.afTriggering=true;
-      try{
-        await fetch(`${this.api}/hardware/camera/autofocus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});
-        await fetch(`${this.api}/hardware/camera/autofocus/trigger`,{method:'POST'});
-      }catch(e){}finally{this.afTriggering=false;}
-    } else {
-      // was on → turn off, lock at current position
-      this.camAF=false;
-      try{await fetch(`${this.api}/hardware/camera/autofocus`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})})}catch(e){}
-    }
+    // AF button = always one-shot trigger. After sweep, slider shows found position (locked).
+    this.afTriggering=true;
+    try{
+      const r=await fetch(`${this.api}/hardware/camera/autofocus/trigger`,{method:'POST'});
+      if(r.ok){
+        const d=await r.json();
+        // lens_position in response is raw VCM (0-4095); convert to diopters for slider
+        if(d.lens_position!=null){
+          this.camFocus=Math.round(d.lens_position/150*10)/10;
+        }
+      }
+      this.camAF=false;  // lock at found position so slider shows result
+    }catch(e){this.toast('AF failed: '+e.message,'error');}
+    finally{this.afTriggering=false;}
   },
 
   /* ─ ringlight ─ */
