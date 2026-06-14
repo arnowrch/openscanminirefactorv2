@@ -293,7 +293,7 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer}
     <div class="fg">
       <label class="lbl">Focus (diopters)</label>
       <div class="rrow">
-        <input type="range" min="0" max="15" step="0.1" x-model.number="camFocus" @change="setFocus(camFocus)">
+        <input type="range" min="0" max="27" step="0.2" x-model.number="camFocus" @change="setFocus(camFocus)">
         <span class="rval" x-text="camFocus.toFixed(1)+'d'"></span>
       </div>
     </div>
