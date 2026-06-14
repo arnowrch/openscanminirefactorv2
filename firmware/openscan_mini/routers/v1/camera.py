@@ -201,6 +201,48 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
     return {"autofocus": request.enabled, "status": "ok"}
 
 
+@router.post("/autofocus/trigger")
+async def trigger_autofocus():
+    """
+    Run a single one-shot AF cycle and return the result.
+    More reliable than AfMode.Continuous on Arducam IMX519.
+    Used by the AF button in the UI for immediate visible feedback.
+    """
+    cam = _get()
+    if not _PICAM2_AVAILABLE:
+        return {"status": "ok", "focused": None, "note": "rpicam fallback, no trigger available"}
+
+    loop = asyncio.get_event_loop()
+
+    async def _run():
+        if cam._busy:
+            return {"status": "busy"}
+        with cam._lock:
+            cam._busy = True
+        try:
+            try:
+                success = await loop.run_in_executor(None, lambda: cam._picam.autofocus_cycle(timeout=5))
+            except Exception as e:
+                logger.warning(f"AF trigger error: {e}")
+                success = False
+            cam.settings.autofocus = True
+            # Restore continuous AF after one-shot converges
+            cam._apply_continuous_af()
+            return {"status": "ok", "focused": success}
+        finally:
+            with cam._lock:
+                cam._busy = False
+
+    return await _run()
+
+
+# expose picamera2 availability for the trigger endpoint
+try:
+    from openscan_mini.controllers.hardware.camera import _PICAM2_AVAILABLE
+except Exception:
+    _PICAM2_AVAILABLE = False
+
+
 @router.post("/exposure")
 async def set_exposure(request: ExposureRequest) -> dict:
     _get().set_exposure(request.shutter_us)
