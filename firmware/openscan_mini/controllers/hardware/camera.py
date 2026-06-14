@@ -2,14 +2,14 @@
 Camera controller for Arducam IMX519.
 
 Primary: picamera2 (persistent session, OS3-derived)
-  - Preview config (960x720) runs continuously with AfMode.Continuous
-  - Photo config (4656x3496) triggered via autofocus_cycle() + switch_mode
-  - autofocus_cycle() manages AfMode internally — never pre-set AfMode before it
-  - CONCURRENCY: _busy flag prevents stream from reading during capture/AF
+  - Preview config at 1920×1440 for good AF metering data; MJPEG stream
+    encodes from this buffer so browser gets crisp frames.
+  - Still config at 4656×3496 (full sensor).
+  - AfWindows coordinates are always in full sensor pixel space (4656×3496).
+  - autofocus_cycle() manages AfMode internally for capture — never pre-set.
+  - _busy=True for the entire capture/AF duration; stream skips frames.
 
-Fallback: rpicam-still subprocess (if picamera2 not installed)
-  Install picamera2: sudo apt install python3-picamera2
-  Then recreate venv: python3 -m venv --system-site-packages ~/openscan_env
+Fallback: rpicam-still subprocess (if picamera2 not installed).
 """
 
 import io
@@ -28,7 +28,7 @@ try:
     from picamera2 import Picamera2
     from libcamera import controls as _lc_controls
     _PICAM2_AVAILABLE = True
-    logger.info("picamera2 available — using persistent camera session (OS3 mode)")
+    logger.info("picamera2 available — using persistent camera session")
 except Exception as _e:
     logger.warning(f"picamera2 not available ({_e}) — falling back to rpicam-still")
 
@@ -67,23 +67,27 @@ class CameraSettings:
         self.height = height
 
 
+# Stream output resolution — high enough to look good in browser, low enough
+# to encode fast on Pi 4. Preview config is 1920×1440 so AF has good data.
+_STREAM_WIDTH = 1280
+_STREAM_HEIGHT = 960
+
+
 class CameraController:
     """
-    IMX519 camera controller.
+    IMX519 camera controller with picamera2 persistent session.
 
-    Uses picamera2 when available (persistent session, fast AF via autofocus_cycle).
-    Falls back to rpicam-still subprocess when picamera2 is not installed.
-
-    Thread safety:
-      _busy=True during any capture or AF cycle.
-      grab_stream_frame() skips frames while _busy — never touches picamera2 concurrently.
+    Thread safety model:
+      - _busy is True for the ENTIRE duration of any capture or AF cycle.
+      - grab_stream_frame() returns (b"", None) immediately when _busy=True.
+      - This prevents concurrent picamera2 access which corrupts AF state.
     """
 
     def __init__(self, settings: Optional[CameraSettings] = None):
         self.settings = settings or CameraSettings()
         self._busy = False
         self._lock = threading.Lock()
-        self._store = None  # SettingsStore — injected from main.py via set_settings_store()
+        self._store = None
 
         if _PICAM2_AVAILABLE:
             self._init_picamera2()
@@ -100,8 +104,8 @@ class CameraController:
     def _init_picamera2(self):
         s = self.settings
         self._picam = Picamera2()
+        self._full_sensor_size = None  # cached after first use
 
-        # Exposure/gain controls shared by both configs
         common = {
             "AeEnable": False,
             "NoiseReductionMode": 0,
@@ -112,12 +116,12 @@ class CameraController:
             "Contrast": s.contrast,
         }
 
-        # Preview at 960×720 for MJPEG stream (~12fps on Pi 4)
+        # 1920×1440 preview — high enough for AF to meter well, still <2fps penalty
         self._preview_cfg = self._picam.create_preview_configuration(
-            main={"size": (960, 720)},
+            main={"size": (1920, 1440)},
             controls=common,
         )
-        # Still at full sensor resolution
+        # Full-res still
         self._photo_cfg = self._picam.create_still_configuration(
             buffer_count=1,
             main={"size": (s.width, s.height), "format": "RGB888"},
@@ -127,10 +131,28 @@ class CameraController:
         self._picam.configure(self._preview_cfg)
         self._picam.start()
         self._apply_continuous_af()
-        logger.info("picamera2 started — IMX519, persistent session")
+        logger.info("picamera2 started — IMX519, 1920×1440 preview, 4656×3496 still")
+
+    def _get_full_sensor_size(self):
+        """Return full sensor pixel dimensions (4656×3496 for IMX519). Cached."""
+        if self._full_sensor_size is None:
+            try:
+                pix = self._picam.camera_properties["PixelArraySize"]
+                full_x = pix.width if hasattr(pix, "width") else int(pix[0])
+                full_y = pix.height if hasattr(pix, "height") else int(pix[1])
+                self._full_sensor_size = (full_x, full_y)
+            except Exception:
+                self._full_sensor_size = (4656, 3496)  # IMX519 fallback
+        return self._full_sensor_size
 
     def _apply_continuous_af(self):
-        """Enable continuous AF for live preview. Call after start() and after each still capture."""
+        """
+        Enable continuous AF for live preview.
+
+        AfWindows are specified in FULL SENSOR pixel coordinates (4656×3496),
+        not preview coordinates. OS3 does the same — this is a libcamera requirement.
+        Using a central 20% window focuses on the object, not the background.
+        """
         if not self.settings.autofocus:
             try:
                 lp = max(0.0, self.settings.lens_position)
@@ -138,33 +160,52 @@ class CameraController:
                     "AfMode": _lc_controls.AfModeEnum.Manual,
                     "LensPosition": lp,
                 })
-                logger.info(f"Manual focus: {lp:.2f} diopters")
+                logger.info(f"Manual focus set: {lp:.2f} diopters")
             except Exception as e:
                 logger.warning(f"Manual focus set failed: {e}")
             return
+
         try:
+            full_x, full_y = self._get_full_sensor_size()
+            # Central 20% of sensor → tightly metered on center object
+            win_w = max(1, full_x // 5)
+            win_h = max(1, full_y // 5)
+            x0 = (full_x - win_w) // 2
+            y0 = (full_y - win_h) // 2
+
             self._picam.set_controls({
+                "AfMetering": _lc_controls.AfMeteringEnum.Windows,
+                "AfWindows": [(x0, y0, win_w, win_h)],
                 "AfMode": _lc_controls.AfModeEnum.Continuous,
                 "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
             })
-            logger.info("AF continuous enabled")
+            logger.info(f"Continuous AF enabled, window=({x0},{y0},{win_w},{win_h}) in sensor coords")
         except Exception as e:
-            logger.warning(f"Continuous AF set failed: {e}")
+            # Fallback: continuous without custom window
+            logger.warning(f"AF window setup failed ({e}) — trying without window")
+            try:
+                self._picam.set_controls({
+                    "AfMode": _lc_controls.AfModeEnum.Continuous,
+                    "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
+                })
+            except Exception as e2:
+                logger.error(f"Continuous AF failed: {e2}")
 
-    # Keep old name as alias — used by setters
+    # Alias kept for backward compat with setters
     def _apply_focus(self, mode: str = "preview"):
         self._apply_continuous_af()
 
-    def _encode_jpeg(self, array) -> bytes:
+    def _encode_jpeg(self, array, quality: int = None) -> bytes:
         try:
             from PIL import Image
         except ImportError:
             raise RuntimeError("Pillow not installed: pip install Pillow")
+        q = quality if quality is not None else self.settings.jpeg_quality
         img = Image.fromarray(array)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=self.settings.jpeg_quality)
+        img.save(buf, format="JPEG", quality=q)
         return buf.getvalue()
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -173,8 +214,12 @@ class CameraController:
         """
         Grab one frame for the MJPEG stream.
         Returns (jpeg_bytes, rgb_array | None).
-        Returns (b"", None) silently when camera is busy with a capture.
-        Never raises — so the stream loop keeps running regardless.
+
+        Skips frame (returns b"", None) when camera is busy with a still capture
+        or AF cycle — prevents concurrent picamera2 access.
+
+        Output is resized to _STREAM_WIDTH × _STREAM_HEIGHT for smooth browser
+        playback even though the internal buffer is 1920×1440.
         """
         if not _PICAM2_AVAILABLE:
             try:
@@ -182,19 +227,20 @@ class CameraController:
             except Exception:
                 return b"", None
 
-        # Skip frame if a still capture or AF cycle is in progress
         if self._busy:
             return b"", None
 
         try:
             array = self._picam.capture_array("main")
             from PIL import Image
+            import numpy as np
             img = Image.fromarray(array)
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
+            # Resize to stream size for browser
+            img = img.resize((_STREAM_WIDTH, _STREAM_HEIGHT), Image.BILINEAR)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=72)
-            import numpy as np
             rgb = np.array(img)
             return buf.getvalue(), rgb
         except Exception as e:
@@ -211,7 +257,7 @@ class CameraController:
             self._picam.set_controls({"AnalogueGain": suggested_gain})
 
     def capture_jpeg(self) -> bytes:
-        """Full-resolution capture (4656×3496). Sets _busy=True for full duration."""
+        """Full-resolution capture (4656×3496). _busy=True for entire duration."""
         with self._lock:
             if self._busy:
                 raise RuntimeError("Camera busy")
@@ -226,7 +272,7 @@ class CameraController:
                 self._busy = False
 
     def capture_preview(self) -> bytes:
-        """Fast 960×720 preview frame (no AF, ~200ms)."""
+        """Fast preview frame for snapshot endpoint."""
         with self._lock:
             if self._busy:
                 raise RuntimeError("Camera busy")
@@ -241,7 +287,6 @@ class CameraController:
                 self._busy = False
 
     def set_settings_store(self, store) -> None:
-        """Inject a SettingsStore so setters auto-persist camera settings."""
         self._store = store
 
     def _persist_settings(self) -> None:
@@ -326,17 +371,16 @@ class CameraController:
 
     def _capture_jpeg_picam2(self) -> bytes:
         """
-        Full-res still capture with autofocus.
+        Full-res still with AF.
 
-        AF flow (matches OS3 pattern):
-          1. autofocus_cycle() sets AfMode.Auto + AfTrigger.Start internally
-          2. Waits for AfState = Focused or Failed
-          3. switch_mode captures in still config
-          4. Restore continuous AF for stream
+        AF flow (matches OS3 pattern exactly):
+          1. autofocus_cycle() → internally sets AfMode.Auto + AfTrigger.Start
+          2. Waits for AfState = Focused or Failed (timeout 5s)
+          3. switch_mode → capture in still config
+          4. Restore continuous AF for preview stream
 
-        IMPORTANT: do NOT call set_controls(AfMode.Auto) before autofocus_cycle().
-        autofocus_cycle() manages this internally. Pre-setting AfMode causes
-        AfState to be absent from metadata on some libcamera builds → KeyError.
+        Do NOT pre-set AfMode before autofocus_cycle(). It manages that itself.
+        AfWindows set during _apply_continuous_af() remain active for the cycle.
         """
         if self.settings.autofocus:
             try:
@@ -346,7 +390,7 @@ class CameraController:
             except Exception as e:
                 logger.warning(f"AF cycle error ({e}) — capturing with current focus")
 
-        # Retry up to 3 times with exponential backoff (like OS3)
+        # 3 attempts with exponential backoff (matches OS3 _capture_array)
         last_exc = None
         for attempt in range(1, 4):
             try:
@@ -356,12 +400,11 @@ class CameraController:
                 finally:
                     req.release()
 
-                # Restore continuous AF before returning to stream
                 self._picam.switch_mode(self._preview_cfg)
                 self._apply_continuous_af()
 
                 data = self._encode_jpeg(array)
-                logger.info(f"picamera2 capture: {len(data):,} bytes @ {self.settings.width}×{self.settings.height}")
+                logger.info(f"Captured {len(data):,} bytes @ {self.settings.width}×{self.settings.height}")
                 return data
             except Exception as e:
                 last_exc = e
@@ -374,57 +417,38 @@ class CameraController:
 
     def _capture_preview_picam2(self) -> bytes:
         array = self._picam.capture_array("main")
-        buf = io.BytesIO()
-        try:
-            from PIL import Image
-            img = Image.fromarray(array)
-            if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            img.save(buf, format="JPEG", quality=75)
-        except ImportError:
-            raise RuntimeError("Pillow not installed: pip install Pillow")
-        return buf.getvalue()
+        return self._encode_jpeg(array, quality=75)
 
-    # ── rpicam-still fallback internals ─────────────────────────────────────
+    # ── rpicam-still fallback ────────────────────────────────────────────────
 
     def _capture_jpeg_rpicam(self) -> bytes:
         if not _RPICAM_BIN:
-            raise RuntimeError("rpicam-still not found. Install picamera2 or rpicam-apps.")
+            raise RuntimeError("rpicam-still not found.")
         s = self.settings
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
         try:
             cmd = [
                 _RPICAM_BIN,
-                "--output", tmp_path,
-                "--timeout", "4000",
-                "--nopreview",
+                "--output", tmp_path, "--timeout", "4000", "--nopreview",
                 "--width", str(s.width), "--height", str(s.height),
-                "--shutter", str(s.shutter_us),
-                "--gain", str(s.gain),
+                "--shutter", str(s.shutter_us), "--gain", str(s.gain),
                 "--quality", str(s.jpeg_quality),
-                "--saturation", str(s.saturation),
-                "--contrast", str(s.contrast),
+                "--saturation", str(s.saturation), "--contrast", str(s.contrast),
                 "--encoding", "jpg",
             ]
             if s.autofocus:
-                cmd += [
-                    "--autofocus-mode", "auto",
-                    "--autofocus-on-capture",
-                    "--autofocus-speed", "fast",
-                    "--autofocus-range", "normal",
-                ]
+                cmd += ["--autofocus-mode", "auto", "--autofocus-on-capture",
+                        "--autofocus-speed", "fast", "--autofocus-range", "normal"]
             else:
                 cmd += ["--autofocus-mode", "manual",
-                        "--lens-position", f"{s.lens_position:.4f}",
-                        "--immediate"]
+                        "--lens-position", f"{s.lens_position:.4f}", "--immediate"]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if result.returncode != 0:
                 raise RuntimeError(f"rpicam-still failed: {result.stderr.strip()}")
             data = Path(tmp_path).read_bytes()
             if not data:
                 raise RuntimeError("rpicam-still produced empty file")
-            logger.info(f"rpicam capture: {len(data):,} bytes")
             return data
         finally:
             try:
@@ -440,21 +464,17 @@ class CameraController:
             tmp_path = tmp.name
         try:
             cmd = [
-                _RPICAM_BIN,
-                "--output", tmp_path,
-                "--timeout", "500",
+                _RPICAM_BIN, "--output", tmp_path, "--timeout", "500",
                 "--nopreview", "--immediate",
-                "--width", "960", "--height", "720",
+                "--width", str(_STREAM_WIDTH), "--height", str(_STREAM_HEIGHT),
                 "--autofocus-mode", "manual",
                 "--lens-position", f"{s.lens_position:.4f}",
-                "--quality", "75",
-                "--encoding", "jpg",
+                "--quality", "72", "--encoding", "jpg",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode != 0:
                 raise RuntimeError(f"Preview failed: {result.stderr.strip()}")
-            data = Path(tmp_path).read_bytes()
-            return data
+            return Path(tmp_path).read_bytes()
         finally:
             try:
                 Path(tmp_path).unlink()
