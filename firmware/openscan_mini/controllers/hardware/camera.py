@@ -490,12 +490,16 @@ class CameraController:
     def _ensure_good_exposure_for_af(self) -> int:
         """
         Before AF sweep: bring centre brightness into 60–200 so Laplacian works.
-        Adjusts both up (if dark) and down (if blown). Floor: 5ms, ceiling: 200ms.
+        Always starts from 50ms regardless of current settings so the loop converges
+        quickly (avoids long settle times from e.g. 500ms user shutter).
+        Floor: 5ms, ceiling: 200ms.
         Returns the shutter actually used; caller decides whether to keep it.
         """
-        shutter = self.settings.shutter_us
+        shutter = min(self.settings.shutter_us, 50_000)  # cap start at 50ms
+        self._picam.set_controls({"ExposureTime": shutter})
+        time.sleep(0.35)  # one full frame at 50ms
 
-        for _ in range(8):
+        for _ in range(6):
             brightness = self._frame_brightness()
             logger.info(f"AF pre-exposure: brightness={brightness:.0f} shutter={shutter}µs")
             if 60 <= brightness <= 200:
@@ -505,7 +509,8 @@ class CameraController:
             else:
                 shutter = min(200_000, shutter * 2)
             self._picam.set_controls({"ExposureTime": shutter})
-            time.sleep(0.3)
+            # Wait long enough for sensor to apply new exposure (≥ 2 frame periods)
+            time.sleep(max(0.25, shutter / 1_000_000 * 3))
 
         return shutter  # return the USED shutter, not the original
 
