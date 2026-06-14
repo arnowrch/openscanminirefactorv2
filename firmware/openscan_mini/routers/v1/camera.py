@@ -201,55 +201,43 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
     return {"autofocus": request.enabled, "status": "ok"}
 
 
-def _af_cycle_sync(picam, timeout: float = 5.0):
+def _af_cycle_sync(picam, wait_s: float = 3.0):
     """
-    One-shot AF cycle — mirrors what OS2's 'libcamera-still --autofocus' does.
-    picamera2 >= 0.3.12 has autofocus_cycle(); older builds need manual trigger.
-    Returns (success: bool, af_state: int|None, lens_position: float|None).
+    One-shot AF — time-based like 'libcamera-still --autofocus-mode auto -t 3000'.
+
+    IMX519 on this libcamera build does NOT report AfState in metadata
+    (capture_metadata()["AfState"] is always None).  Polling AfState therefore
+    never terminates early — instead we just trigger and wait a fixed time for
+    the VCM to physically settle, exactly as libcamera-still does with -t.
     """
     import time
     try:
         from libcamera import controls as lc
     except Exception:
+        logger.error("libcamera controls not importable")
         return False, None, None
 
-    # Prefer built-in autofocus_cycle() if available
-    if hasattr(picam, "autofocus_cycle"):
-        try:
-            success = picam.autofocus_cycle(timeout=timeout)
-            try:
-                md = picam.capture_metadata()
-                af_state = md.get("AfState")
-                lens_pos = md.get("LensPosition")
-            except Exception:
-                af_state, lens_pos = None, None
-            logger.info(f"autofocus_cycle() → success={success} AfState={af_state} LensPosition={lens_pos}")
-            return success, af_state, lens_pos
-        except Exception as e:
-            logger.warning(f"autofocus_cycle() failed ({e}) — falling back to manual trigger")
-
-    # Manual trigger fallback (older picamera2)
     try:
+        # Switch out of Manual mode → Auto, fire trigger
         picam.set_controls({
             "AfMode": lc.AfModeEnum.Auto,
             "AfTrigger": lc.AfTriggerEnum.Start,
         })
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        logger.info(f"AF trigger fired — waiting {wait_s}s for VCM to settle")
+        time.sleep(wait_s)
+
+        # Read back whatever state is available after settle
+        try:
             md = picam.capture_metadata()
             af_state = md.get("AfState")
             lens_pos = md.get("LensPosition")
-            if af_state == lc.AfStateEnum.Focused:
-                logger.info(f"AF focused (manual trigger) LensPosition={lens_pos}")
-                return True, af_state, lens_pos
-            elif af_state == lc.AfStateEnum.Failed:
-                logger.warning(f"AF failed (manual trigger) LensPosition={lens_pos}")
-                return False, af_state, lens_pos
-            time.sleep(0.05)
-        logger.warning(f"AF timeout after {timeout}s — AfState={af_state}")
-        return False, af_state, lens_pos
+        except Exception:
+            af_state, lens_pos = None, None
+
+        logger.info(f"AF done: AfState={af_state} LensPosition={lens_pos}")
+        return True, af_state, lens_pos
     except Exception as e:
-        logger.error(f"AF manual trigger error: {e}")
+        logger.error(f"AF cycle error: {e}")
         return False, None, None
 
 
@@ -272,7 +260,7 @@ async def trigger_autofocus():
             cam._busy = True
         try:
             success, af_state, lens_pos = await loop.run_in_executor(
-                None, lambda: _af_cycle_sync(cam._picam, timeout=5.0)
+                None, lambda: _af_cycle_sync(cam._picam, wait_s=3.0)
             )
             cam.settings.autofocus = True
             # Stay in AfMode.Auto — lens holds the focused position.
