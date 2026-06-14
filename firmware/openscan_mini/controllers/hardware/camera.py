@@ -1,13 +1,22 @@
 """
 Camera controller for Arducam IMX519.
 
-Primary: picamera2 (persistent session, OS3-derived)
-  - Preview config at 1920×1440 for good AF metering data; MJPEG stream
-    encodes from this buffer so browser gets crisp frames.
+Primary: picamera2 (persistent session) for preview stream + stills.
+  - Preview config at 1920×1440; MJPEG stream encodes from this buffer.
   - Still config at 4656×3496 (full sensor).
-  - AfWindows coordinates are always in full sensor pixel space (4656×3496).
-  - autofocus_cycle() manages AfMode internally for capture — never pre-set.
   - _busy=True for the entire capture/AF duration; stream skips frames.
+
+VCM (autofocus) — IMPORTANT:
+  On this Arducam IMX519 + Bookworm libcamera build, the VCM is NOT
+  driven by libcamera's AfMode/AfTrigger/LensPosition controls.
+  It is controlled directly via V4L2:
+    /dev/v4l-subdev1  control 0x009a090a  focus_absolute  range 0-4095
+  libcamera-still --autofocus works because the RPi IPA uses this path
+  internally. picamera2 set_controls(AfMode=Auto) does NOT reach the VCM.
+
+  We implement:
+    - Manual focus: v4l2-ctl set-ctrl focus_absolute
+    - Autofocus:    sharpness sweep across VCM positions (hill-climb)
 
 Fallback: rpicam-still subprocess (if picamera2 not installed).
 """
@@ -15,12 +24,66 @@ Fallback: rpicam-still subprocess (if picamera2 not installed).
 import io
 import logging
 import subprocess
-import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── V4L2 VCM (voice coil motor) direct control ─────────────────────────────
+# Arducam IMX519 VCM lives on /dev/v4l-subdev1, control 0x009a090a.
+# libcamera AfMode/AfTrigger/LensPosition do NOT reach this VCM on this build.
+_VCM_DEV = "/dev/v4l-subdev1"
+_VCM_MIN = 0
+_VCM_MAX = 4095
+# Practical macro range: 0=infinity, ~300=50cm, ~600=20cm, ~900=10cm
+_VCM_SWEEP_START = 50
+_VCM_SWEEP_END   = 950
+_VCM_SWEEP_STEP  = 50   # coarse pass
+_VCM_FINE_STEP   = 10   # fine pass ±60 around best
+
+
+def _vcm_set(pos: int) -> bool:
+    """Set VCM (focus_absolute) directly via v4l2-ctl. Returns True on success."""
+    pos = max(_VCM_MIN, min(_VCM_MAX, int(pos)))
+    try:
+        r = subprocess.run(
+            ["v4l2-ctl", "-d", _VCM_DEV, "--set-ctrl", f"focus_absolute={pos}"],
+            capture_output=True, timeout=1,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _vcm_diopters_to_raw(diopters: float) -> int:
+    """Convert diopter lens position to VCM raw value. Linear approximation."""
+    # 0d = infinity (VCM=0), 12d ≈ 8cm (VCM≈900)
+    return int(max(0.0, diopters) * 75)
+
+
+def _measure_sharpness(array) -> float:
+    """Laplacian variance sharpness on centre crop. Higher = sharper."""
+    import numpy as np
+    if array is None or array.size == 0:
+        return 0.0
+    h, w = array.shape[:2]
+    # Central 40% crop — focus on the object, ignore background
+    y0, y1 = h // 3, 2 * h // 3
+    x0, x1 = w // 3, 2 * w // 3
+    crop = array[y0:y1, x0:x1]
+    if crop.ndim == 3:
+        gray = (crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114).astype("float32")
+    else:
+        gray = crop.astype("float32")
+    # Laplacian via simple kernel
+    lap = (
+        -gray[:-2, 1:-1] - gray[2:, 1:-1] - gray[1:-1, :-2] - gray[1:-1, 2:]
+        + 4 * gray[1:-1, 1:-1]
+    )
+    return float(lap.var())
+
 
 # ── picamera2 availability ──────────────────────────────────────────────────
 _PICAM2_AVAILABLE = False
@@ -343,19 +406,73 @@ class CameraController:
             logger.warning(f"Failed to persist camera settings: {e}")
 
     def set_focus(self, lens_position: float) -> None:
+        """Manual focus via V4L2 VCM direct control."""
         self.settings.autofocus = False
         self.settings.lens_position = max(0.0, lens_position)
-        if _PICAM2_AVAILABLE:
-            self._apply_continuous_af()
+        raw = _vcm_diopters_to_raw(self.settings.lens_position)
+        ok = _vcm_set(raw)
+        logger.info(f"Manual focus: {self.settings.lens_position:.2f}d → VCM={raw} ({'ok' if ok else 'FAILED'})")
         self._persist_settings()
-        logger.info(f"Manual focus: {self.settings.lens_position:.2f} diopters")
 
     def set_autofocus(self, enabled: bool) -> None:
         self.settings.autofocus = enabled
-        if _PICAM2_AVAILABLE:
-            self._apply_continuous_af()
         self._persist_settings()
         logger.info(f"Autofocus: {'on' if enabled else 'off'}")
+
+    def autofocus_sweep(self) -> int:
+        """
+        Hill-climb AF via V4L2 VCM + sharpness measurement.
+        Equivalent to what libcamera-still --autofocus does internally.
+        Returns best VCM raw position found.
+        """
+        if self._busy:
+            raise RuntimeError("Camera busy")
+        with self._lock:
+            self._busy = True
+        try:
+            return self._do_autofocus_sweep()
+        finally:
+            with self._lock:
+                self._busy = False
+
+    def _do_autofocus_sweep(self) -> int:
+        best_pos = _VCM_SWEEP_START
+        best_sharp = -1.0
+
+        # Coarse sweep
+        for pos in range(_VCM_SWEEP_START, _VCM_SWEEP_END + 1, _VCM_SWEEP_STEP):
+            _vcm_set(pos)
+            time.sleep(0.12)  # VCM settle + fresh frame
+            try:
+                arr = self._picam.capture_array("main")
+                rgb = arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
+                s = _measure_sharpness(rgb)
+            except Exception:
+                s = 0.0
+            logger.debug(f"AF sweep pos={pos} sharpness={s:.1f}")
+            if s > best_sharp:
+                best_sharp = s
+                best_pos = pos
+
+        # Fine sweep ±60 around coarse best
+        for pos in range(max(_VCM_MIN, best_pos - 60), min(_VCM_MAX, best_pos + 61), _VCM_FINE_STEP):
+            _vcm_set(pos)
+            time.sleep(0.10)
+            try:
+                arr = self._picam.capture_array("main")
+                rgb = arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
+                s = _measure_sharpness(rgb)
+            except Exception:
+                s = 0.0
+            if s > best_sharp:
+                best_sharp = s
+                best_pos = pos
+
+        _vcm_set(best_pos)
+        logger.info(f"AF sweep done: best_pos={best_pos} sharpness={best_sharp:.1f}")
+        # Store approximate diopter equivalent
+        self.settings.lens_position = best_pos / 75.0
+        return best_pos
 
     def set_exposure(self, shutter_us: int, gain: Optional[float] = None) -> None:
         self.settings.shutter_us = max(100, shutter_us)
@@ -431,8 +548,7 @@ class CameraController:
           4. switch_mode back to preview + restore AfMode.Continuous
         """
         if self.settings.autofocus:
-            self._set_focus_mode("photo")
-            self._trigger_af_and_wait(3.0)
+            self._do_autofocus_sweep()
 
         # 3 attempts with exponential backoff (OS3 pattern)
         last_exc = None

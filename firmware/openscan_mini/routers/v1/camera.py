@@ -203,25 +203,12 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
 
 def _af_trigger_sync(cam):
     """
-    Time-based AF for the UI button — mirrors 'libcamera-still --autofocus -t 3000'.
-
-    autofocus_cycle() crashes on this Pi with KeyError('AfState') because this
-    libcamera/IMX519 build never populates AfState in metadata. Use manual trigger
-    + fixed wait instead (same approach libcamera-still uses internally).
+    Hill-climb AF via V4L2 VCM + sharpness sweep.
+    libcamera AfMode/AfTrigger do NOT move the VCM on this Arducam IMX519 build.
+    Direct V4L2 focus_absolute on /dev/v4l-subdev1 is the only working path.
     """
-    cam._set_focus_mode("photo")       # AfMode.Auto + AfRange.Macro + AfWindows
-    cam._trigger_af_and_wait(3.0)      # AfTrigger.Start + 3s wait
-
-    try:
-        md = cam._picam.capture_metadata()
-        af_state = md.get("AfState")
-        lens_pos = md.get("LensPosition")
-    except Exception:
-        af_state, lens_pos = None, None
-
-    # Stay in AfMode.Auto — lens holds the focused position.
-    logger.info(f"AF done: AfState={af_state} LensPosition={lens_pos}")
-    return True, af_state, lens_pos
+    best_pos = cam._do_autofocus_sweep()
+    return True, None, best_pos
 
 
 @router.post("/autofocus/trigger")
