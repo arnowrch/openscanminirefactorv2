@@ -181,13 +181,16 @@ class CameraController:
             if mode == "photo":
                 # OS3 exact: set AfMode.Auto BEFORE calling autofocus_cycle()
                 # If Continuous is set, autofocus_cycle() trigger is ignored → AfState stays null
+                # AfRange.Macro: OpenScan Mini camera is 10-30cm from object — macro range only.
+                # Full-range scan wastes time hunting infinity which is never the target.
                 self._picam.set_controls({
                     "AfMetering": _lc_controls.AfMeteringEnum.Windows,
                     "AfWindows": win,
                     "AfMode": _lc_controls.AfModeEnum.Auto,
+                    "AfRange": _lc_controls.AfRangeEnum.Macro,
                     "AfSpeed": _lc_controls.AfSpeedEnum.Fast,
                 })
-                logger.info(f"AF mode=Auto (photo), window={win}")
+                logger.info(f"AF mode=Auto range=Macro (photo), window={win}")
             else:
                 # preview: Continuous so lens stays responsive
                 self._picam.set_controls({

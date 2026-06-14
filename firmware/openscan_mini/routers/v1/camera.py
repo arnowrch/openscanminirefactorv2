@@ -203,14 +203,13 @@ async def set_autofocus(request: AutofocusRequest) -> dict:
 
 def _af_trigger_sync(cam):
     """
-    OS3-exact one-shot AF sequence for the UI button:
-      1. _set_focus_mode("photo") → AfMode.Auto + AfWindows  ← KEY: must be Auto, not Continuous
-      2. autofocus_cycle()  ← now works because AfMode.Auto is set
-      3. Restore AfMode.Continuous for live preview
+    OS3-exact one-shot AF for the UI button.
+      1. _set_focus_mode("photo") → AfMode.Auto + AfRange.Macro + AfWindows
+      2. autofocus_cycle() — blocks until Focused/Failed (works because Auto mode is set)
+      3. HOLD position (do NOT restore Continuous — it would immediately re-scan away)
 
-    Root cause of previous failure: autofocus_cycle() was called while camera
-    was in AfMode.Continuous. libcamera ignores the trigger in that state →
-    AfState stays null → cycle always times out.
+    For the preview: lens stays locked at the focused distance after button press.
+    Continuous is only restored in the capture path (after switch_mode_and_capture_request).
     """
     cam._set_focus_mode("photo")
     try:
@@ -227,8 +226,8 @@ def _af_trigger_sync(cam):
     except Exception:
         af_state, lens_pos = None, None
 
-    # Restore Continuous so preview stays live and responsive
-    cam._set_focus_mode("preview")
+    # Stay in AfMode.Auto — lens holds the focused position.
+    # Restoring Continuous here would immediately restart scanning and lose focus.
     logger.info(f"AF done: AfState={af_state} LensPosition={lens_pos}")
     return success, af_state, lens_pos
 
