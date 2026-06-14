@@ -226,8 +226,8 @@ async def trigger_autofocus():
                 logger.warning(f"AF trigger error: {e}")
                 success = False
             cam.settings.autofocus = True
-            # Restore continuous AF after one-shot converges
-            cam._apply_continuous_af()
+            # Stay in AfMode.Auto after one-shot cycle — lens holds the focused position.
+            # Do NOT call _apply_continuous_af() here: it restarts continuous scanning and drifts focus.
             return {"status": "ok", "focused": success}
         finally:
             with cam._lock:

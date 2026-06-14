@@ -116,9 +116,11 @@ class CameraController:
             "Contrast": s.contrast,
         }
 
-        # 1920×1440 preview — high enough for AF to meter well, still <2fps penalty
+        # 1920×1440 preview — high enough for AF to meter well.
+        # RGB888 format ensures capture_array() returns (H,W,3) in RGB order
+        # so PIL/numpy get correct colors without channel-swap hacks.
         self._preview_cfg = self._picam.create_preview_configuration(
-            main={"size": (1920, 1440)},
+            main={"size": (1920, 1440), "format": "RGB888"},
             controls=common,
         )
         # Full-res still
@@ -401,7 +403,8 @@ class CameraController:
                     req.release()
 
                 self._picam.switch_mode(self._preview_cfg)
-                self._apply_continuous_af()
+                # Do NOT call _apply_continuous_af() here — it restarts scanning and loses focus.
+                # AfMode.Auto (set by autofocus_cycle) holds the lens at the focused position.
 
                 data = self._encode_jpeg(array)
                 logger.info(f"Captured {len(data):,} bytes @ {self.settings.width}×{self.settings.height}")
