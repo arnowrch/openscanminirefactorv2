@@ -81,19 +81,31 @@ def _measure_sharpness(array, cy_frac: float = 0.5, cx_frac: float = 0.5) -> flo
     cx = max(dw, min(w - dw, cx))
     crop = array[cy - dh : cy + dh, cx - dw : cx + dw]
     if crop.ndim == 3:
-        gray = (crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114).astype("float32")
+        gray = crop[..., 0] * 0.299 + crop[..., 1] * 0.587 + crop[..., 2] * 0.114
     else:
-        gray = crop.astype("float32")
-    try:
-        import cv2
-        lap = cv2.Laplacian(gray, cv2.CV_64F)
-        return float(lap.var())
-    except ImportError:
+        gray = crop
+    # cv2.Laplacian on this Pi's OpenCV build raises (not ImportError) on
+    # non-contiguous / oddly-strided float input → force a clean contiguous
+    # float32 buffer. Broaden the except so a cv2 RUNTIME error also falls back
+    # to numpy instead of propagating up as sharpness=0.0.
+    gray = np.ascontiguousarray(gray, dtype=np.float32)
+
+    def _numpy_lap_var(g):
         lap = (
-            -gray[:-2, 1:-1] - gray[2:, 1:-1] - gray[1:-1, :-2] - gray[1:-1, 2:]
-            + 4 * gray[1:-1, 1:-1]
+            -g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:]
+            + 4 * g[1:-1, 1:-1]
         )
         return float(lap.var())
+
+    try:
+        import cv2
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:
+        try:
+            return _numpy_lap_var(gray)
+        except Exception as e:
+            logger.warning(f"_measure_sharpness numpy fallback failed: {e}")
+            return 0.0
 
 
 # Sharpness target: must exceed this after AF before declaring success.
@@ -536,9 +548,14 @@ class CameraController:
     def _grab_rgb(self):
         # Capture twice — first frame after a VCM move may still be from the
         # previous position (sensor pipeline latency). Second is reliably fresh.
+        import numpy as np
         self._picam.capture_array("main")
         arr = self._picam.capture_array("main")
-        return arr[:, :, ::-1] if arr.ndim == 3 and arr.shape[2] == 3 else arr
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            # BGR→RGB. ascontiguousarray drops the negative stride so cv2 ops
+            # downstream don't choke on a non-contiguous buffer.
+            arr = np.ascontiguousarray(arr[:, :, ::-1])
+        return arr
 
     def _frame_brightness(self) -> float:
         """Mean luma of the centre 40% crop. Used to detect overexposure before AF."""
@@ -638,21 +655,10 @@ class CameraController:
             time.sleep(0.15)  # VCM settle
             try:
                 arr = self._grab_rgb()
-                if not _diag_done:
-                    import numpy as _np
-                    if arr is None:
-                        logger.info("AF DIAG: _grab_rgb() returned None")
-                    else:
-                        logger.info(
-                            f"AF DIAG: arr shape={getattr(arr,'shape',None)} "
-                            f"dtype={getattr(arr,'dtype',None)} "
-                            f"size={getattr(arr,'size',None)} "
-                            f"contig={getattr(getattr(arr,'flags',None),'c_contiguous',None)} "
-                            f"mean={float(_np.mean(arr)):.1f} "
-                            f"min={float(_np.min(arr)):.0f} max={float(_np.max(arr)):.0f}"
-                        )
-                    _diag_done = True
                 s = _measure_sharpness(arr, af_cy_frac, af_cx_frac)
+                if not _diag_done:
+                    logger.info(f"AF DIAG: first sharpness={s:.1f} at pos={pos}")
+                    _diag_done = True
             except Exception as _e:
                 if not _diag_done:
                     logger.info(f"AF DIAG: measurement raised {type(_e).__name__}: {_e}")
