@@ -449,8 +449,9 @@ class CameraController:
 
     def autofocus_sweep(self) -> int:
         """
-        Hill-climb AF via V4L2 VCM + sharpness measurement.
-        Equivalent to what libcamera-still --autofocus does internally.
+        AF via rpicam-still --autofocus (same engine as OS2 stock firmware).
+        Closes picamera2 to release the camera, runs rpicam-still, reads back
+        VCM position via v4l2-ctl, then restarts picamera2 at that position.
         Returns best VCM raw position found.
         """
         if self._busy:
@@ -458,10 +459,79 @@ class CameraController:
         with self._lock:
             self._busy = True
         try:
-            return self._do_autofocus_sweep()
+            return self._do_autofocus_rpicam()
         finally:
             with self._lock:
                 self._busy = False
+
+    def _do_autofocus_rpicam(self) -> int:
+        """
+        Use rpicam-still --autofocus as the AF engine.
+        Temporarily releases picamera2 so rpicam-still can own the camera.
+        After AF, reads the VCM position libcamera settled on and restarts preview.
+        """
+        logger.info("AF: releasing picamera2, handing camera to rpicam-still --autofocus")
+
+        # Determine current exposure for rpicam-still (cap at 50ms for AF)
+        shutter_us = min(self.settings.shutter_us, 50_000)
+
+        # Close picamera2 so rpicam-still can open the camera
+        try:
+            self._picam.stop()
+            self._picam.close()
+        except Exception as e:
+            logger.warning(f"AF: picamera2 stop/close error: {e}")
+
+        best_pos = 0
+        try:
+            rpicam = _find_rpicam() or "rpicam-still"
+            cmd = [
+                rpicam,
+                "--autofocus-mode", "auto",
+                "--autofocus-range", "full",
+                "--timeout", "5000",
+                "--nopreview",
+                "--shutter", str(shutter_us),
+                "-o", "/tmp/af_frame.jpg",
+            ]
+            logger.info(f"AF: running {' '.join(cmd)}")
+            r = subprocess.run(cmd, capture_output=True, timeout=15)
+            if r.returncode != 0:
+                logger.warning(f"AF rpicam-still exit {r.returncode}: {r.stderr.decode()[:200]}")
+            else:
+                logger.info("AF: rpicam-still completed")
+
+            # Read back VCM position libcamera left the lens at
+            r2 = subprocess.run(
+                ["v4l2-ctl", "-d", _VCM_DEV, "--get-ctrl", "focus_absolute"],
+                capture_output=True, timeout=2,
+            )
+            if r2.returncode == 0:
+                # Output format: "focus_absolute: 3270"
+                val_str = r2.stdout.decode().strip().split(":")[-1].strip()
+                best_pos = int(val_str)
+                logger.info(f"AF: VCM={best_pos} ({best_pos/150:.1f}d)")
+            else:
+                logger.warning(f"AF: could not read VCM: {r2.stderr.decode()}")
+
+        except Exception as e:
+            logger.error(f"AF rpicam error: {e}")
+
+        # Reinitialise picamera2 and resume preview
+        try:
+            self._init_picamera2()
+            # Set VCM back to found position (picamera2 init may reset it)
+            if best_pos > 0:
+                time.sleep(0.3)  # let picamera2 settle
+                _vcm_set(best_pos)
+                # Restore scan exposure
+                self._picam.set_controls({"ExposureTime": self.settings.shutter_us})
+        except Exception as e:
+            logger.error(f"AF: picamera2 restart error: {e}")
+
+        self.settings.lens_position = best_pos / 150.0
+        logger.info(f"AF done: VCM={best_pos} ({self.settings.lens_position:.1f}d)")
+        return best_pos
 
     def _grab_rgb(self):
         # Capture twice — first frame after a VCM move may still be from the
