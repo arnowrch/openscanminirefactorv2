@@ -99,8 +99,8 @@ async def mjpeg_stream(request: Request):
                         _analysis = result
                         _analysis_ts = time.time()
 
-                        # Auto-apply suggestions if enabled
-                        if _auto_adjust_enabled:
+                        # Auto-apply suggestions — skip during AF/capture (busy)
+                        if _auto_adjust_enabled and not cam._busy:
                             if result.suggested_shutter_us or result.suggested_gain:
                                 await loop.run_in_executor(
                                     None,

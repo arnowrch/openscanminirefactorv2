@@ -338,11 +338,11 @@ class CameraController:
             except Exception:
                 return b"", None
 
-        if self._busy:
-            # Return last cached frame so browser doesn't freeze during AF/capture
-            if self._last_preview_jpeg:
-                return self._last_preview_jpeg, None
-            return b"", None
+        with self._lock:
+            if self._busy:
+                # Return last cached frame so browser doesn't freeze during AF/capture
+                cached = self._last_preview_jpeg
+                return (cached, None) if cached else (b"", None)
 
         try:
             array = self._picam.capture_array("main")
@@ -489,24 +489,31 @@ class CameraController:
 
     def _ensure_good_exposure_for_af(self) -> int:
         """
-        Before AF sweep: fix overexposure so Laplacian ≠ 0 on white objects.
-        Returns the shutter value actually used (may differ from settings.shutter_us).
-        The caller decides whether to keep or restore it.
+        Before AF sweep: bring centre brightness into 60–200 so Laplacian works.
+        Adjusts both up (if dark) and down (if blown). Floor: 5ms, ceiling: 200ms.
+        Returns the shutter actually used; caller decides whether to keep it.
         """
         shutter = self.settings.shutter_us
 
-        for _ in range(6):
+        for _ in range(8):
             brightness = self._frame_brightness()
-            if brightness <= 210:
+            logger.info(f"AF pre-exposure: brightness={brightness:.0f} shutter={shutter}µs")
+            if 60 <= brightness <= 200:
                 break
-            shutter = max(500, shutter // 2)
+            if brightness > 200:
+                shutter = max(5_000, shutter // 2)
+            else:
+                shutter = min(200_000, shutter * 2)
             self._picam.set_controls({"ExposureTime": shutter})
-            time.sleep(0.25)
-            logger.info(f"AF pre-exposure: brightness={brightness:.0f} → shutter={shutter}µs")
+            time.sleep(0.3)
 
         return shutter  # return the USED shutter, not the original
 
     def _do_autofocus_sweep(self) -> int:
+        # Brief pause so any in-flight stream capture_array() call completes
+        # before we take exclusive VCM control. Prevents frame corruption.
+        time.sleep(0.2)
+
         # ── Step 0: Disable libcamera continuous AF so it doesn't override V4L2 ──
         # AfMode.Continuous sends VCM commands via the IPA and overwrites our
         # focus_absolute writes on /dev/v4l-subdev1. Switch to Manual first.
